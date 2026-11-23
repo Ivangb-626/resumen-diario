@@ -701,7 +701,6 @@ def fetch_openverse_image(article: dict[str, Any]) -> tuple[str, str]:
         return "", ""
     params = urllib.parse.urlencode({
         "q": original[:180], "page_size": "12", "mature": "false",
-        "license_type": "all", "extension": "jpg,png,webp",
     })
     request = urllib.request.Request(
         "https://api.openverse.org/v1/images/?" + params,
