@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import send_digest as digest
 from send_digest import collect_stories, prepare_article_images
 
 
