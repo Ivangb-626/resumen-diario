@@ -11,7 +11,7 @@ El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin 
 3. **Cultura, sociedad y descubrimientos**: historia, arqueología, patrimonio, libros, educación, medioambiente y descubrimientos.
 4. **Ciencia, investigación y tecnología**: más peso para ciencia e investigación que para tecnología; neurociencia, cerebro, epilepsia, EEG, medicina, biología, genética, física, espacio e IA científica.
 
-Cada noticia incluye titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
+Cada noticia incluye imagen incrustada cuando la fuente publica una miniatura o metadatos Open Graph accesibles, titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
 
 Al final se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible.
 
@@ -21,7 +21,7 @@ Al final se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro S
 - El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
 - Gemini clasifica los candidatos por relevancia y redacta el resumen editorial usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
 - Los datos de mercado se consultan desde Yahoo Finance.
-- El correo se envía por Gmail SMTP.
+- El correo se envía por Gmail SMTP e incrusta las imágenes de las noticias como recursos MIME relacionados cuando se pueden obtener. Si una fuente no ofrece una imagen accesible, esa noticia puede aparecer sin imagen.
 
 **Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
 
@@ -42,9 +42,9 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 2. Crea una API key para Gemini.
 3. Añádela en GitHub como secreto llamado exactamente `GEMINI_API_KEY`.
 
-El proyecto usa `gemini-3.8-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
+El proyecto usa `gemini-3.1-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Si no configuras la clave, el correo seguirá enviándose en modo de respaldo con extractos RSS, pero sin selección editorial ni análisis de Gemini. Si la API falla temporalmente, también se utiliza ese modo de respaldo para no perder el envío.
+Si no configuras la clave, el correo seguirá enviándose en modo de respaldo con extractos RSS, pero sin selección editorial ni análisis de Gemini. Si la API falla, el correo y los logs distinguirán entre secreto ausente y error de API (por ejemplo, modelo, permisos o cuota), sin revelar la clave.
 
 ### Gmail SMTP
 
