@@ -649,5 +649,28 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_34_low_metadata_only_candidate_is_rejected_without_visual_confirmation(self):
+        digest._GEMINI_VISION_DISABLED = False
+        article = {
+            "id": "N034",
+            "headline": "Euskadi impulsa la innovación en las pymes",
+            "original_headline": "Euskadi promotes innovation among SMEs",
+            "summary": "The Basque Country seeks to improve SME competitiveness.",
+            "_image_search_queries": ["Basque Country SME entrepreneurs workshop Euskadi"],
+            "_image_candidate_descriptors": {},
+        }
+        candidate = ("https://img.example/questionable.jpg", "commons", "", "")
+        with patch.object(
+            digest, "image_candidate_relevance_score", return_value=0.29,
+        ), patch.object(
+            digest, "download_inline_image", return_value=(b"photo", "jpeg"),
+        ), patch.object(
+            digest, "gemini_visual_rank", return_value={},
+        ):
+            result = digest.download_ranked_candidates(article, [candidate], "test-key")
+        self.assertIsNone(result)
+
+
+
 if __name__ == "__main__":
     unittest.main()
