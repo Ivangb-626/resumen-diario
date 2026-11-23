@@ -611,5 +611,23 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_32_publisher_provenance_does_not_fabricate_a_text_match(self):
+        article = {
+            "headline": "El Banco Central Europeo presenta nuevas instalaciones en Fráncfort",
+            "original_headline": "European Central Bank presents new Frankfurt facilities",
+            "summary": "The ECB presented its new facilities.",
+            "_image_search_queries": ["European Central Bank Frankfurt headquarters"],
+            "_image_candidate_descriptors": {},
+        }
+        score = digest.image_candidate_relevance_score(
+            article,
+            ("https://publisher.example/og-image.jpg", "publisher",
+             "https://publisher.example/story", ""),
+        )
+        self.assertGreater(score, 0.2)
+        self.assertLess(score, 0.6)
+
+
+
 if __name__ == "__main__":
     unittest.main()
