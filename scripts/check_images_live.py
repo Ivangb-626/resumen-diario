@@ -34,9 +34,9 @@ def main() -> int:
             f"{article.get('image_source', 'SIN IMAGEN')}"
         )
 
-    # Require a meaningful baseline, not just one lucky image. At least 75% of
-    # the eight current stories must contain a real, downloaded, email-safe photo.
-    required = max(1, (len(articles) * 3 + 3) // 4)
+    # Every selected story must have a non-empty, validated image, using an
+    # explicitly labelled illustrative Commons photo as the final fallback.
+    required = len(articles)
     if len(attached) < required:
         raise RuntimeError(
             f"Cobertura insuficiente: {len(attached)}/{len(articles)}; "
