@@ -26,6 +26,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Validar sintaxis Python
+        run: python -m py_compile scripts/send_digest.py
+
       - name: Recopilar, analizar noticias y enviar correo
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
