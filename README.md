@@ -44,7 +44,7 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 
 El proyecto usa `gemini-3.1-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Si no configuras la clave o Gemini falla, el correo seguirá enviándose con el seguimiento de mercados y un aviso del error, pero se omitirán las noticias RSS sin traducir para no mostrar contenido editorial en otros idiomas. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
+Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error. Como respaldo, solo se muestran noticias RSS cuyo titular y extracto superan un filtro conservador de castellano; no se traducen ni se inventan contenidos. Las noticias que no superan ese filtro se omiten. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
 ### Gmail SMTP
 
