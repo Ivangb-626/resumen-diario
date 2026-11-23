@@ -553,13 +553,29 @@ def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=22) as response:
-            content_type = response.headers.get("Content-Type", "").lower()
-            final_url = response.geturl()
-            if "html" not in content_type:
-                print(f"Imagen publisher: la URL acabó en contenido {content_type or 'desconocido'} ({final_url[:100]}).")
-                return [], final_url
-            page = response.read(4_000_000).decode("utf-8", errors="replace")
+        page = ""
+        final_url = article_url
+        content_type = ""
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(request, timeout=22) as response:
+                    content_type = response.headers.get("Content-Type", "").lower()
+                    final_url = response.geturl()
+                    if "html" not in content_type:
+                        print(f"Imagen publisher: la URL acabó en contenido {content_type or 'desconocido'} ({final_url[:100]}).")
+                        return [], final_url
+                    page = response.read(4_000_000).decode("utf-8", errors="replace")
+                break
+            except HTTPError as exc:
+                if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
+                    raise
+                retry_header = exc.headers.get("Retry-After", "") if exc.headers else ""
+                try:
+                    delay = min(8.0, max(2.0, float(retry_header)))
+                except (TypeError, ValueError):
+                    delay = 2.5 * (attempt + 1)
+                print(f"Publisher HTTP {exc.code}; reintento {attempt + 1}/2 en {delay:.1f}s.")
+                time.sleep(delay)
         parser = ArticleImageParser()
         parser.feed(page)
 
@@ -876,7 +892,7 @@ def download_first_available(candidates: list[tuple[str, str, str, str]]) -> tup
 def embed_candidates(articles: list[dict[str, Any]], candidates: dict[int, list[tuple[str, str, str, str]]]) -> None:
     """Download candidates for stories which do not yet have an embedded photo."""
     pending = [article for article in articles if not article.get("_image_data")]
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {
             pool.submit(download_first_available, candidates.get(id(article), [])): (index, article)
             for index, article in enumerate(articles, 1) if article in pending
@@ -905,7 +921,9 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
 
     # Round 1: extract every candidate from the original publisher page.
     publisher_success = 0
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    # Google News and several publishers rate-limit bursts; two parallel page reads
+    # plus per-request retries are more reliable than a large concurrent fan-out.
+    with ThreadPoolExecutor(max_workers=2) as pool:
         futures = {pool.submit(fetch_article_images, article): article for article in articles}
         for future in as_completed(futures):
             article = futures[future]
