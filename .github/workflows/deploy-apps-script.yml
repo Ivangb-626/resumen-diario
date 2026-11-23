@@ -32,15 +32,13 @@ jobs:
         working-directory: apps-script
         env:
           CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
-          CLASP_JSON: ${{ secrets.CLASP_JSON }}
         run: |
-          if [ -z "$CLASPRC_JSON" ] || [ -z "$CLASP_JSON" ]; then
-            echo "Faltan los secretos CLASPRC_JSON o CLASP_JSON."
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "Falta el secreto CLASPRC_JSON."
             exit 1
           fi
           printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
-          printf '%s' "$CLASP_JSON" > .clasp.json
-          chmod 600 "$HOME/.clasprc.json" .clasp.json
+          chmod 600 "$HOME/.clasprc.json"
 
       - name: Subir código a Google Apps Script
         working-directory: apps-script
