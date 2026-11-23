@@ -531,6 +531,24 @@ def image_text_score(left: str, right: str) -> float:
     return max(overlap, sequence)
 
 
+def image_token_overlap(left: str, right: str) -> float:
+    """Measure shared meaningful words without fuzzy character-level false positives."""
+    ignored = {
+        "the", "and", "for", "with", "from", "that", "this", "una", "uno",
+        "los", "las", "del", "por", "para", "con", "sobre", "entre", "como",
+        "its", "are", "was", "were", "has", "have", "into", "over", "after",
+    }
+    a = {
+        word for word in re.findall(r"[a-záéíóúüñ0-9]{3,}", (left or "").lower())
+        if word not in ignored
+    }
+    b = {
+        word for word in re.findall(r"[a-záéíóúüñ0-9]{3,}", (right or "").lower())
+        if word not in ignored
+    }
+    return len(a & b) / max(1, len(a))
+
+
 def image_url_is_generic(image_url: str) -> bool:
     path = urllib.parse.urlparse(image_url).path.lower()
     return any(term in path for term in (
@@ -877,8 +895,8 @@ def fetch_commons_candidates(
             description = clean_html(str((meta.get("ImageDescription") or {}).get("value") or ""))
             title = str(page.get("title") or "").replace("File:", "").replace("_", " ")
             descriptor = " ".join((title, object_name, description[:1800]))
-            score = max(image_text_score(query, descriptor) for query in search_queries[:2])
-            headline_score = image_text_score(original, descriptor)
+            score = max(image_token_overlap(query, descriptor) for query in search_queries[:2])
+            headline_score = image_token_overlap(original, descriptor)
             score = max(score, headline_score * 0.72)
 
             # Require at least one substantive shared term from the targeted query.
