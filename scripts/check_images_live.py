@@ -38,9 +38,13 @@ def main() -> int:
         str(article.get("image_match_type") or "ilustrativa/respaldo")
         for article in attached
     )
+    # Only direct/related labels have actually passed image-level visual review.
+    # "metadata" means the model was unavailable and selection used text/provenance only.
     specific = [article for article in attached if article.get("image_match_type") in {
-        "direct", "related", "metadata"
+        "direct", "related"
     }]
+    metadata_only = [article for article in attached if article.get("image_match_type") == "metadata"]
+    nonillustrative = specific + metadata_only
     illustrative = [article for article in attached if article.get("image_match_type") == "illustrative"]
     rows = []
     for index, article in enumerate(articles, 1):
@@ -87,20 +91,31 @@ def main() -> int:
     (output_dir / "index.html").write_text(gallery, encoding="utf-8")
 
     print(f"Prueba real completada: {len(attached)}/{len(articles)} fotografías incrustables.")
-    print(f"Fotografías de noticia (coincidencia de metadatos o revisión visual): {len(specific)}")
+    print(f"Fotografías verificadas visualmente (direct/related): {len(specific)}")
+    print(f"Fotografías seleccionadas por metadatos, sin verificación visual: {len(metadata_only)}")
     print(f"Fotografías ilustrativas temáticas: {len(illustrative)}")
     print(f"Sin fotografía: {len(articles) - len(attached)}")
     print(f"Fuentes: {dict(source_counts)}")
     print(f"Relación estimada: {dict(relation_counts)}")
     print(f"Galería guardada en: {output_dir.resolve()}")
 
-    # Do not reward generic placeholders or force unrelated city photos into the email.
-    # The sample should still yield a meaningful proportion of story-specific candidates.
-    minimum_specific = max(1, (len(articles) + 3) // 4)
-    if len(specific) < minimum_specific:
+    # Distinguish a genuine visual match from metadata-only selection. If Gemini is
+    # temporarily unavailable, keep the smoke test useful without claiming verification.
+    minimum_nonillustrative = max(1, (len(articles) + 3) // 4)
+    if digest._GEMINI_VISION_DISABLED:
+        print(
+            "AVISO: Gemini visión no estuvo disponible; los resultados 'metadata' "
+            "son coincidencias no verificadas visualmente."
+        )
+        if len(nonillustrative) < minimum_nonillustrative:
+            raise RuntimeError(
+                f"Fotografías no ilustrativas insuficientes: {len(nonillustrative)}/{len(articles)}; "
+                f"se exigen al menos {minimum_nonillustrative}."
+            )
+    elif len(specific) < minimum_nonillustrative:
         raise RuntimeError(
-            f"Relevancia específica insuficiente: {len(specific)}/{len(articles)}; "
-            f"se exigen al menos {minimum_specific} fotografías específicas."
+            f"Fotografías verificadas insuficientes: {len(specific)}/{len(articles)}; "
+            f"se exigen al menos {minimum_nonillustrative}."
         )
     return 0
 
