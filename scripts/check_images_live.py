@@ -37,6 +37,10 @@ def main() -> int:
         str(article.get("image_match_type") or "ilustrativa/respaldo")
         for article in attached
     )
+    specific = [article for article in attached if article.get("image_match_type") in {
+        "direct", "related", "metadata"
+    }]
+    illustrative = [article for article in attached if article.get("image_match_type") == "illustrative"]
     rows = []
     for index, article in enumerate(articles, 1):
         image_data = article.get("_image_data")
@@ -76,15 +80,20 @@ def main() -> int:
     (output_dir / "index.html").write_text(gallery, encoding="utf-8")
 
     print(f"Prueba real completada: {len(attached)}/{len(articles)} fotografías incrustables.")
+    print(f"Fotografías de noticia (coincidencia de metadatos o revisión visual): {len(specific)}")
+    print(f"Fotografías ilustrativas temáticas: {len(illustrative)}")
+    print(f"Sin fotografía: {len(articles) - len(attached)}")
     print(f"Fuentes: {dict(source_counts)}")
     print(f"Relación estimada: {dict(relation_counts)}")
     print(f"Galería guardada en: {output_dir.resolve()}")
 
-    required = len(articles)
-    if len(attached) < required:
+    # Do not reward generic placeholders or force unrelated city photos into the email.
+    # The sample should still yield a meaningful proportion of story-specific candidates.
+    minimum_specific = max(1, (len(articles) + 3) // 4)
+    if len(specific) < minimum_specific:
         raise RuntimeError(
-            f"Cobertura insuficiente: {len(attached)}/{required}; "
-            f"se exigen al menos {required} fotografías descargables."
+            f"Relevancia específica insuficiente: {len(specific)}/{len(articles)}; "
+            f"se exigen al menos {minimum_specific} fotografías específicas."
         )
     return 0
 
