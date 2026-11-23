@@ -518,12 +518,25 @@ def fetch_yahoo_quote(symbol: str) -> dict[str, Any] | None:
 MARKETS = [
     ("S&P 500", "^GSPC"),
     ("Nasdaq Composite", "^IXIC"),
-    ("Ibex 35", "^IBEX"),
     ("Euro Stoxx 50", "^STOXX50E"),
     ("Bitcoin", "BTC-USD"),
     ("Oro (futuros)", "GC=F"),
     ("Petróleo WTI", "CL=F"),
     ("EUR/USD", "EURUSD=X"),
+]
+
+# Large, widely followed global companies only. This fixed universe avoids obscure
+# micro-caps dominating the daily movers list because of illiquid price jumps.
+MOVER_WATCHLIST = [
+    ("NVIDIA", "NVDA"), ("Apple", "AAPL"), ("Microsoft", "MSFT"),
+    ("Amazon", "AMZN"), ("Alphabet", "GOOGL"), ("Meta", "META"),
+    ("Tesla", "TSLA"), ("Broadcom", "AVGO"), ("Berkshire Hathaway", "BRK-B"),
+    ("JPMorgan Chase", "JPM"), ("Eli Lilly", "LLY"), ("Walmart", "WMT"),
+    ("Oracle", "ORCL"), ("AMD", "AMD"), ("Netflix", "NFLX"),
+    ("Visa", "V"), ("Mastercard", "MA"), ("Exxon Mobil", "XOM"),
+    ("Costco", "COST"), ("Salesforce", "CRM"), ("ASML", "ASML"),
+    ("SAP", "SAP"), ("LVMH", "MC.PA"), ("Novo Nordisk", "NOVO-B.CO"),
+    ("Siemens", "SIE.DE"), ("TotalEnergies", "TTE.PA"),
 ]
 
 
@@ -536,10 +549,24 @@ def collect_markets() -> list[dict[str, Any]]:
             name, symbol = futures[future]
             quote = future.result()
             if quote:
-                values.append({"name": name, **quote})
+                values.append({"name": name, "symbol": symbol, **quote})
     order = {name: i for i, (name, _) in enumerate(MARKETS)}
     values.sort(key=lambda item: order[item["name"]])
     return values
+
+
+def collect_market_movers(limit: int = 5) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    values = []
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futures = {pool.submit(fetch_yahoo_quote, symbol): (name, symbol)
+                   for name, symbol in MOVER_WATCHLIST}
+        for future in as_completed(futures):
+            name, symbol = futures[future]
+            quote = future.result()
+            if quote:
+                values.append({"name": name, "symbol": symbol, **quote})
+    values.sort(key=lambda item: item["change_pct"], reverse=True)
+    return values[:limit], list(reversed(values[-limit:]))
 
 
 def fmt_number(value: float, currency: str) -> str:
@@ -557,8 +584,9 @@ def spanish_date(value: datetime) -> str:
     return f"{days[value.weekday()]}, {value.day} de {months[value.month - 1]} de {value.year}"
 
 
-def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_used: bool,
-                ai_error: str = "") -> EmailMessage:
+def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
+                movers_up: list[dict[str, Any]], movers_down: list[dict[str, Any]],
+                ai_used: bool, ai_error: str = "") -> EmailMessage:
     now = datetime.now(BERLIN)
     articles = editorial.get("articles", [])
     grouped: dict[str, list[dict[str, Any]]] = {name: [] for name, _ in SECTIONS}
@@ -574,6 +602,19 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
         sign = "+" if market["change_pct"] >= 0 else ""
         plain.append(f"{market['name']}: {fmt_number(market['price'], market['currency'])} ({sign}{market['change_pct']:.2f}%)")
     plain.append("Datos de mercado indicativos. Las variaciones comparan los dos últimos cierres disponibles.")
+    plain.append("\\nMAYORES SUBIDAS (GRANDES EMPRESAS)")
+    for item in movers_up:
+        sign = "+" if item["change_pct"] >= 0 else ""
+        plain.append(f"{item['name']} ({item['symbol']}): {sign}{item['change_pct']:.2f}% — {fmt_number(item['price'], item['currency'])}")
+    if not movers_up:
+        plain.append("Datos no disponibles.")
+    plain.append("\\nMAYORES BAJADAS (GRANDES EMPRESAS)")
+    for item in movers_down:
+        sign = "+" if item["change_pct"] >= 0 else ""
+        plain.append(f"{item['name']} ({item['symbol']}): {sign}{item['change_pct']:.2f}% — {fmt_number(item['price'], item['currency'])}")
+    if not movers_down:
+        plain.append("Datos no disponibles.")
+    plain.append("Universo limitado a grandes compañías internacionales conocidas; ordenado por variación porcentual diaria.")
     for section, _ in SECTIONS:
         section_articles = grouped[section]
         if not section_articles:
@@ -652,6 +693,32 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
         + ("".join(market_rows) if market_rows else "<tr><td colspan='3'>Datos de mercado no disponibles hoy.</td></tr>")
         + "</tbody></table>"
     )
+
+    def mover_rows(items: list[dict[str, Any]]) -> str:
+        if not items:
+            return "<tr><td colspan='3' style='padding:8px'>Datos no disponibles.</td></tr>"
+        rows = []
+        for item in items:
+            sign = "+" if item["change_pct"] >= 0 else ""
+            rows.append(
+                f"<tr><td style='padding:8px;border-bottom:1px solid #e5e7eb'>{html.escape(item['name'])} "
+                f"<span style='color:#64748b'>({html.escape(item['symbol'])})</span></td>"
+                f"<td style='padding:8px;text-align:right;border-bottom:1px solid #e5e7eb'>{fmt_number(item['price'], item['currency'])}</td>"
+                f"<td style='padding:8px;text-align:right;border-bottom:1px solid #e5e7eb'>{sign}{item['change_pct']:.2f}%</td></tr>"
+            )
+        return "".join(rows)
+
+    mover_html = (
+        "<h3 style='font-size:16px;margin:22px 0 6px'>Mayores subidas — grandes empresas</h3>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px'><tbody>"
+        + mover_rows(movers_up) + "</tbody></table>"
+        "<h3 style='font-size:16px;margin:18px 0 6px'>Mayores bajadas — grandes empresas</h3>"
+        "<table style='width:100%;border-collapse:collapse;font-size:13px'><tbody>"
+        + mover_rows(movers_down) + "</tbody></table>"
+        "<p style='font-size:11px;color:#64748b'>Selección de grandes compañías internacionales conocidas; "
+        "ordenada por variación porcentual frente al cierre anterior disponible.</p>"
+    )
+    market_html += mover_html
     if ai_used:
         note = ""
     elif not os.environ.get("GEMINI_API_KEY", "").strip():
@@ -747,9 +814,14 @@ def main() -> int:
 
     print("Consultando seguimiento de mercados…")
     markets = collect_markets()
-    print(f"Noticias seleccionadas: {len(editorial.get('articles', []))}; activos con datos: {len(markets)}")
+    movers_up, movers_down = collect_market_movers()
+    print(
+        f"Noticias seleccionadas: {len(editorial.get('articles', []))}; "
+        f"activos principales: {len(markets)}; mayores subidas: {len(movers_up)}; "
+        f"mayores bajadas: {len(movers_down)}"
+    )
     prepare_article_images(editorial)
-    message = build_email(editorial, markets, ai_used, ai_error)
+    message = build_email(editorial, markets, movers_up, movers_down, ai_used, ai_error)
     send_email(message, address, recipient, app_password)
     print("Correo enviado correctamente.")
     return 0
