@@ -18,6 +18,7 @@ def main() -> int:
     articles = [{
         "id": story.id,
         "url": story.link,
+        "image_source_url": story.source_url,
         "headline": story.title,
         "original_headline": story.title,
         "source_name": story.source,
