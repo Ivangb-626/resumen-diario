@@ -716,10 +716,11 @@ def fetch_gdelt_images(articles: list[dict[str, Any]]) -> dict[str, str]:
 def fetch_openverse_image(article: dict[str, Any]) -> tuple[str, str]:
     """Search openly licensed images, retaining only candidates tied to the exact headline."""
     original = str(article.get("original_headline") or article.get("headline") or "").strip()
-    if len(original) < 8:
+    query = str(article.get("image_search_query") or fallback_image_query(article) or original).strip()
+    if len(query) < 6:
         return "", ""
     params = urllib.parse.urlencode({
-        "q": original[:180], "page_size": "12", "mature": "false",
+        "q": query[:180], "page_size": "20", "mature": "false",
     })
     request = urllib.request.Request(
         "https://api.openverse.org/v1/images/?" + params,
@@ -736,12 +737,13 @@ def fetch_openverse_image(article: dict[str, Any]) -> tuple[str, str]:
                 str(tag.get("name") or "") if isinstance(tag, dict) else str(tag)
                 for tag in tags
             )
+            descriptor = f"{title} {tag_text}"
             score = max(
-                image_text_score(original, title),
-                image_text_score(original, f"{title} {tag_text}"),
+                image_token_overlap(query, descriptor),
+                image_token_overlap(original, descriptor) * 0.65,
             )
             candidate = usable_image_url(str(result.get("thumbnail") or result.get("url") or ""))
-            if candidate and not image_url_is_generic(candidate) and score >= 0.36 and score > best_score:
+            if candidate and not image_url_is_generic(candidate) and score >= 0.18 and score > best_score:
                 best_url, best_score = candidate, score
                 creator = str(result.get("creator") or "Autor desconocido")
                 license_name = str(result.get("license") or "licencia abierta")
@@ -791,7 +793,10 @@ def generate_commons_queries(
     } for article in articles]
     prompt = f"""
 You prepare search queries for real photographs on Wikimedia Commons.
-For every news story below, create 1 or 2 short, concrete image-search phrases.
+For every news story below, create exactly 2 short, concrete image-search phrases.
+The first must target the distinctive person/place/institution/event. The second
+must target a plausible visible scene or physical subject (for example server racks,
+fishing boats in port, a parliamentary chamber, a railway track or a laboratory).
 Use named people, places, institutions, objects, events and visible scenes from
 the story. Prefer phrases likely to appear in a Commons file title or description.
 Translate abstract policy/economic language into the real-world subject that a
@@ -799,7 +804,7 @@ photograph would depict, without inventing a scene or adding unrelated context.
 Keep important proper names. Queries should be 4-9 words, concise, and can be in
 English because Commons metadata is often in English. Do not return generic words
 such as "news", "business", "politics", "technology" or "people" on their own.
-Return JSON only:
+Return JSON only with exactly two distinct queries per story:
 {{"queries":[{{"id":"N001","queries":["specific phrase one","specific phrase two"]}}]}}
 
 STORIES:
@@ -834,17 +839,18 @@ def fetch_commons_candidates(
     """Search Wikimedia Commons with focused terms and return relevance-ranked photo candidates."""
     original = str(article.get("original_headline") or article.get("headline") or "").strip()
     search_queries = [q for q in (queries or []) if len(q.strip()) >= 6]
+    fallback = fallback_image_query(article)
+    if fallback and fallback not in search_queries:
+        search_queries.append(fallback)
     if not search_queries:
-        fallback = fallback_image_query(article)
-        if fallback:
-            search_queries = [fallback]
+        return []
     if not search_queries:
         return []
 
     article_id = str(article.get("id") or article.get("url") or "")
     best: dict[str, tuple[float, str, str, str, str]] = {}
 
-    for query in search_queries[:2]:
+    for query in search_queries[:3]:
         params = urllib.parse.urlencode({
             "action": "query",
             "generator": "search",
@@ -895,7 +901,7 @@ def fetch_commons_candidates(
             description = clean_html(str((meta.get("ImageDescription") or {}).get("value") or ""))
             title = str(page.get("title") or "").replace("File:", "").replace("_", " ")
             descriptor = " ".join((title, object_name, description[:1800]))
-            score = max(image_token_overlap(query, descriptor) for query in search_queries[:2])
+            score = max(image_token_overlap(query, descriptor) for query in search_queries[:3])
             headline_score = image_token_overlap(original, descriptor)
             score = max(score, headline_score * 0.72)
 
