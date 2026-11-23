@@ -57,32 +57,4 @@ Después, GitHub Actions intentará ejecutarlo cada día a las 08:00, hora de Al
 El repositorio es público. El código y los titulares que aparezcan en los logs pueden ser visibles públicamente. Las contraseñas se guardan como secretos de GitHub y no se imprimen en los logs. No cambies la visibilidad del repositorio sin revisar antes las condiciones de facturación de Actions para repositorios privados.
 
 
-## Pendientes personales
-
-La lista inicial basada en tareas pendientes del contexto guardado de ChatGPT está en:
-`data/pending_tasks.json`.
-
-Se envía un segundo correo diario mediante el workflow **Pendientes por correo**, programado a las 08:15 (Europe/Berlin), usando los mismos secretos de Gmail que el resumen de noticias.
-
-Los estados admitidos son:
-- `pending`: pendiente.
-- `in_progress`: en curso.
-- `waiting`: esperando algo o a alguien.
-- `completed`: completado; no aparece en el correo.
-
-Para cerrar una tarea, cambia su estado a `completed`. Para añadir una tarea, agrega un nuevo objeto con un `id` único, `title`, `category`, `status`, `priority` y `next_action`.
-
-**Nota:** esta lista es una carga inicial de lo que aparece pendiente en el contexto guardado. No existe sincronización automática entre la memoria de ChatGPT y GitHub; cuando me comuniques nuevos pendientes o tareas terminadas, actualizaré el JSON del repositorio.
-
-
-## Sincronización con ChatGPT
-
-La memoria interna de ChatGPT y GitHub son sistemas separados: GitHub no puede leer ni observar automáticamente los cambios que el sistema de Memoria de ChatGPT guarde en segundo plano.
-
-Para mantener la lista sincronizada durante nuestras conversaciones, se seguirá este protocolo:
-- Cuando el usuario pida guardar algo como pendiente, ChatGPT añadirá o actualizará el objeto correspondiente en `data/pending_tasks.json` mediante la integración de GitHub.
-- Cuando el usuario indique que una tarea está terminada, ChatGPT cambiará su estado a `completed`.
-- Si cambia la fecha, prioridad o siguiente acción, ChatGPT actualizará el mismo elemento en vez de crear un duplicado.
-- El correo diario leerá siempre la última versión de ese archivo en la rama `main`.
-
-No hace falta que el usuario edite GitHub manualmente. La sincronización se realiza en el mismo turno en que se pide registrar o cambiar una tarea en ChatGPT. No se pueden replicar cambios de Memoria que ocurran silenciosamente fuera de una conversación.
+La gestión de tareas personales se ha trasladado al repositorio privado [pendientes-personales](https://github.com/Ivangb-626/pendientes-personales).
