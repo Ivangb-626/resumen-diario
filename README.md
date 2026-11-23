@@ -55,3 +55,21 @@ Después, GitHub Actions intentará ejecutarlo cada día a las 08:00, hora de Al
 ## Coste y privacidad
 
 El repositorio es público. El código y los titulares que aparezcan en los logs pueden ser visibles públicamente. Las contraseñas se guardan como secretos de GitHub y no se imprimen en los logs. No cambies la visibilidad del repositorio sin revisar antes las condiciones de facturación de Actions para repositorios privados.
+
+
+## Pendientes personales
+
+La lista inicial basada en tareas pendientes del contexto guardado de ChatGPT está en:
+`data/pending_tasks.json`.
+
+Se envía un segundo correo diario mediante el workflow **Pendientes por correo**, programado a las 08:15 (Europe/Berlin), usando los mismos secretos de Gmail que el resumen de noticias.
+
+Los estados admitidos son:
+- `pending`: pendiente.
+- `in_progress`: en curso.
+- `waiting`: esperando algo o a alguien.
+- `completed`: completado; no aparece en el correo.
+
+Para cerrar una tarea, cambia su estado a `completed`. Para añadir una tarea, agrega un nuevo objeto con un `id` único, `title`, `category`, `status`, `priority` y `next_action`.
+
+**Nota:** esta lista es una carga inicial de lo que aparece pendiente en el contexto guardado. No existe sincronización automática entre la memoria de ChatGPT y GitHub; cuando me comuniques nuevos pendientes o tareas terminadas, actualizaré el JSON del repositorio.
