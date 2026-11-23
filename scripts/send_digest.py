@@ -672,9 +672,7 @@ def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
                     str(item.get("alt") or ""), str(item.get("class") or ""),
                     str(item.get("id") or ""),
                 )).strip()
-        for image_url in unique:
-            if not descriptors.get(image_url):
-                descriptors[image_url] = f"{headline} fotografía principal del artículo"
+        # Preserve only actual alt/class metadata; don't fabricate a headline match.
         if not unique:
             print(
                 f"Imagen publisher: 0 candidatas; HTML={len(page)} bytes, "
@@ -1579,10 +1577,7 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
             candidates[id(article)].append((
                 rss_candidate, "rss", str(article.get("url") or ""), ""
             ))
-            article["_image_candidate_descriptors"].setdefault(
-                rss_candidate,
-                f"{article.get('original_headline') or article.get('headline', '')} RSS story photograph",
-            )
+            # RSS provenance is evidence of article association, not proof of image content.
 
     commons_count = sum(
         any(candidate[1] == "commons" for candidate in candidates[id(article)])
