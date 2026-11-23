@@ -797,5 +797,65 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_35_gemini_visual_rank_retries_transient_503(self):
+        digest._GEMINI_VISION_DISABLED = False
+        answer = json.dumps({
+            "candidates": [{
+                "content": {"parts": [{
+                    "text": json.dumps({
+                        "images": [{
+                            "index": 1, "relevance": 91,
+                            "relation": "related", "reason": "Mismo objeto de la noticia",
+                        }]
+                    })
+                }]}
+            }]
+        }).encode()
+        temporary_error = digest.HTTPError(
+            "https://generativelanguage.googleapis.com", 503,
+            "Service Unavailable", None, None,
+        )
+        downloaded = [(
+            ("https://img.example/story.jpg", "commons", "", ""),
+            b"\\xff\\xd8fake-jpeg", 0.8,
+        )]
+        with patch.object(
+            digest.urllib.request, "urlopen",
+            side_effect=[temporary_error, FakeResponse(answer, "application/json")],
+        ) as mocked, patch.object(digest.time, "sleep") as sleep:
+            result = digest.gemini_visual_rank({
+                "id": "N035",
+                "headline": "La noticia concreta sobre una infraestructura",
+                "summary": "La infraestructura es el elemento central.",
+            }, downloaded, "test-key")
+
+        self.assertEqual(mocked.call_count, 2)
+        sleep.assert_called_once_with(5)
+        self.assertEqual(result[1]["relation"], "related")
+        self.assertFalse(digest._GEMINI_VISION_DISABLED)
+
+    def test_36_gemini_text_request_honors_custom_retry_delays(self):
+        payload = {
+            "candidates": [{
+                "content": {"parts": [{"text": '{"queries":[]}'}]}
+            }]
+        }
+        temporary_error = digest.HTTPError(
+            "https://generativelanguage.googleapis.com", 503,
+            "Service Unavailable", None, None,
+        )
+        with patch.object(
+            digest.urllib.request, "urlopen",
+            side_effect=[
+                temporary_error,
+                FakeResponse(json.dumps(payload).encode(), "application/json"),
+            ],
+        ) as mocked, patch.object(digest.time, "sleep") as sleep:
+            result = digest.gemini_request("prompt", "test-key", retry_delays=(2,))
+
+        self.assertEqual(result, '{"queries":[]}')
+        self.assertEqual(mocked.call_count, 2)
+        sleep.assert_called_once_with(2)
+
 if __name__ == "__main__":
     unittest.main()
