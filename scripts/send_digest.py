@@ -348,16 +348,9 @@ CANDIDATOS:
 
 
 def fallback_selection(stories: list[Story]) -> dict[str, Any]:
-    """Conservative no-API fallback: send RSS extracts, without AI analysis."""
-    selected = sorted(stories, key=lambda s: s.published, reverse=True)
-    return {"articles": [{
-        "id": s.id, "section": s.section, "headline": s.title,
-        "summary": s.excerpt or "El feed no proporciona un extracto suficiente.",
-        "why_it_matters": "No se ha generado análisis editorial porque Gemini no ha podido procesar las noticias en este envío.",
-        "source_name": s.source, "url": s.link, "published": s.published.isoformat(),
-        "image_url": s.image_url,
-    } for s in selected[:20]]}
-
+    """Do not publish untranslated RSS headlines when Gemini is unavailable."""
+    print("Se omiten las noticias RSS sin traducción al castellano.", file=sys.stderr)
+    return {"articles": []}
 
 
 
