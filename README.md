@@ -13,7 +13,7 @@ El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin 
 
 Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia incluye imagen incrustada cuando la fuente publica una miniatura o metadatos Open Graph accesibles, titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
 
-Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible.
+Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible (sin Ibex 35). A continuación aparecen las cinco mayores subidas y las cinco mayores bajadas del día dentro de una cesta predefinida de grandes compañías internacionales conocidas, como NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Tesla, JPMorgan, ASML, SAP y LVMH. Así se evita que valores pequeños o poco conocidos dominen la lista por movimientos poco representativos.
 
 ## Cómo funciona
 
