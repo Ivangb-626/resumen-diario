@@ -2,27 +2,64 @@
 
 Proyecto gratuito para recopilar hasta cinco noticias recientes de tus intereses y enviarlas por correo cada mañana, incluso con el ordenador apagado.
 
-## Método recomendado: Google Apps Script
+## Cómo funciona
 
-Esta alternativa evita las contraseñas de aplicación de Gmail, servidores externos, n8n y API de IA de pago. Google ejecuta el script en sus propios servidores después de que autorices el acceso una sola vez.
+- **Google Apps Script** ejecuta el resumen diariamente en la nube, aproximadamente entre las 08:00 y las 09:00 (Europe/Berlin).
+- **GitHub** conserva el código fuente.
+- **GitHub Actions + clasp** permiten desplegar automáticamente en Apps Script cada cambio que se suba a `apps-script/`.
+- El envío se realiza desde la cuenta Google que autorizó el proyecto.
+- No se requiere una contraseña de aplicación de Gmail ni una API de IA de pago.
 
-### Configuración inicial
+## Conectar este repositorio al proyecto de Apps Script (una sola vez)
 
-1. Abre https://script.google.com/home/start con la cuenta de Google donde quieres recibir el resumen.
-2. Crea un proyecto nuevo y llámalo **Resumen diario**.
-3. Abre el archivo Code.gs, borra su contenido y pega el código de [apps-script/Code.gs](https://github.com/Ivangb-626/resumen-diario/blob/main/apps-script/Code.gs).
-4. Guarda el proyecto.
-5. En el selector de funciones, elige **setupDailyDigest** y pulsa **Ejecutar**.
-6. Google te pedirá autorizar el envío de correos y las solicitudes a fuentes RSS. Acepta los permisos.
-7. La función crea el disparador diario y envía un primer correo de prueba.
+Google ofrece CI/CD oficial con `clasp` y GitHub Actions. Sigue estos pasos una vez para autorizar la publicación automática.
 
-El script utiliza como destinataria la cuenta que creó y autorizó el proyecto.
+### 1. Obtener el Script ID
 
-### Horario
+1. Abre tu proyecto de Apps Script.
+2. Entra en **Configuración del proyecto** (icono de engranaje).
+3. En **IDs**, copia el **ID de secuencia de comandos (Script ID)**.
 
-El disparador usa la zona **Europe/Berlin** y la hora 08:00. Google Apps Script puede ejecutar el disparador en cualquier momento entre las 08:00 y las 09:00; después mantiene esa hora aproximada día a día. No garantiza el minuto exacto.
+No es una contraseña, pero no lo publiques fuera de este proceso.
 
-### Temas incluidos
+### 2. Habilitar la API de Apps Script
+
+Abre https://script.google.com/home/usersettings y activa **Google Apps Script API**.
+
+### 3. Obtener credenciales OAuth de clasp en tu ordenador
+
+1. Asegúrate de tener Node.js 20 o posterior: https://nodejs.org/
+2. Abre PowerShell.
+3. Ejecuta:
+
+   `npx --yes @google/clasp login`
+
+4. Se abrirá el navegador. Accede con la misma cuenta Google propietaria del proyecto y concede el permiso para administrar Apps Script.
+5. Al terminar, se habrá creado el archivo `%USERPROFILE%\.clasprc.json`.
+
+**Ese archivo contiene un token de actualización que permite administrar tus proyectos de Apps Script. No lo pegues aquí, no lo subas al repositorio y no lo compartas con nadie.**
+
+### 4. Añadir dos secretos al repositorio de GitHub
+
+Abre https://github.com/Ivangb-626/resumen-diario/settings/secrets/actions y crea:
+
+- `CLASPRC_JSON`: pega el contenido completo de `%USERPROFILE%\.clasprc.json`.
+- `CLASP_JSON`: pega un JSON con el Script ID y la raíz del proyecto, con esta estructura:
+
+   `{"scriptId":"PEGA_AQUI_EL_SCRIPT_ID","rootDir":"."}`
+
+Sustituye el texto de ejemplo por el Script ID real. No añadas estos valores a un archivo del repositorio.
+
+### 5. Desplegar y probar
+
+1. Abre la pestaña Actions: https://github.com/Ivangb-626/resumen-diario/actions
+2. Selecciona **Deploy Google Apps Script**.
+3. Pulsa **Run workflow**.
+4. Comprueba que termina en verde.
+
+A partir de ahí, cuando ChatGPT modifique y guarde cualquier archivo dentro de `apps-script/` en la rama `main`, GitHub Actions subirá automáticamente el cambio al proyecto de Apps Script. No edites después el código manualmente en el editor de Apps Script, porque el repositorio será la fuente principal.
+
+## Temas del resumen
 
 - Mercados, inversión a largo plazo y fondos indexados.
 - Inteligencia artificial y tecnología.
@@ -33,15 +70,15 @@ El disparador usa la zona **Europe/Berlin** y la hora 08:00. Google Apps Script 
 
 El script selecciona titulares, extractos RSS, fuentes, fechas y enlaces. No llama a una API de IA y no inventa análisis.
 
-### Coste y límites
+## Horario y límites
 
-Apps Script tiene cuotas gratuitas sujetas a cambios. Para cuentas Gmail personales, la cuota publicada de MailApp es de 100 destinatarios por día, suficiente para un único correo diario. Cada ejecución tiene un límite de seis minutos.
+Apps Script usa la zona `Europe/Berlin` y crea un disparador a las 08:00. Google puede ejecutar el disparador en cualquier momento dentro de la franja 08:00–09:00; no garantiza el minuto exacto.
 
-Fuentes oficiales:
+Apps Script tiene cuotas gratuitas y límites sujetos a cambios. Revisa:
 - https://developers.google.com/apps-script/guides/triggers/installable
 - https://developers.google.com/apps-script/guides/services/quotas
-- https://developers.google.com/apps-script/reference/mail/mail-app
+- https://developers.google.com/apps-script/guides/clasp
 
-### Gestionar el horario
+## Seguridad
 
-Puedes ejecutar manualmente **sendDailyDigest** desde el editor para mandar otro resumen de prueba. Para borrar el horario, abre **Triggers / Desencadenadores** en el panel izquierdo y elimina el disparador de **sendDailyDigest**.
+El repositorio es público. El código y los archivos de configuración que se confirmen pueden ser visibles; por eso las credenciales OAuth y el Script ID de despliegue se almacenan como secretos de GitHub. Nunca subas `.clasprc.json`, tokens ni contraseñas al repositorio.
