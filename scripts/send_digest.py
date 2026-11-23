@@ -855,9 +855,9 @@ def fallback_visual_queries(article: dict[str, Any]) -> list[str]:
 
     if any(term in text for term in ("data center", "data centre", "centro de datos", "centros de datos")):
         queries = [
-            "data center server room server racks",
-            "data centre cooling infrastructure servers",
-            "data center construction facility exterior",
+            "data center server room rows server racks",
+            "data centre cooling equipment server infrastructure",
+            "computer servers network racks data centre interior",
         ]
     elif any(term in text for term in ("hermandad", "cofrad", "procesión", "procession", "holy week", "semana santa")):
         queries = [
@@ -1351,6 +1351,15 @@ def image_descriptor_conflicts_with_story(
     )
     if found_zone in {"gaza", "rafah", "palestine", "palestinian", "israel", "west bank"}:
         return is_spain_local_story and is_pension_or_local_business
+
+    is_data_centre_story = any(term in story_text for term in (
+        "data center", "data centre", "centro de datos", "centros de datos",
+    ))
+    if is_data_centre_story and any(term in photo_text for term in (
+        "space station", "space processing facility", "kennedy space center",
+        "nasa", "launch pad", "space shuttle",
+    )):
+        return True
 
     is_swiss_currency_story = any(term in story_text for term in (
         "swiss franc", "franco suizo", "franc suizo", "chf",
