@@ -11,7 +11,7 @@ El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin 
 3. **Cultura, sociedad y descubrimientos**: historia, arqueología, patrimonio, libros, educación, medioambiente y descubrimientos.
 4. **Ciencia, investigación y tecnología**: más peso para ciencia e investigación que para tecnología; neurociencia, cerebro, epilepsia, EEG, medicina, biología, genética, física, espacio e IA científica.
 
-Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia intenta incluir una fotografía incrustada. El sistema prueba, por orden, los metadatos de imagen del artículo original, las miniaturas del RSS, imágenes sociales de GDELT asociadas a titulares coincidentes y, si se configura una clave, resultados de Brave Image Search filtrados por similitud del titular. No se aceptan resultados genéricos por tema. También se intenta la siguiente fuente si una imagen no se puede descargar. No se incluyen ofertas de empleo ni prácticas.
+Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia intenta incluir una fotografía incrustada. El sistema prueba, por orden, las imágenes estructuradas y las fotografías dentro del HTML del artículo, miniaturas RSS, imágenes sociales de GDELT, Openverse y Wikimedia Commons con coincidencia por titular y, si se configura una clave, Brave Image Search. Se convierten WebP, AVIF, PNG y GIF a JPEG para mejorar la compatibilidad con Gmail. Si una imagen falla al descargarse, prueba la siguiente candidata. No se incluyen ofertas de empleo ni prácticas.
 
 Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible (sin Ibex 35). A continuación aparecen las cinco mayores subidas y las cinco mayores bajadas del día dentro de una cesta predefinida de grandes compañías internacionales conocidas, como NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Tesla, JPMorgan, ASML, SAP y LVMH. Así se evita que valores pequeños o poco conocidos dominen la lista por movimientos poco representativos.
 
@@ -21,7 +21,7 @@ Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, E
 - El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
 - Gemini clasifica los candidatos por relevancia y redacta en castellano los titulares, resúmenes y análisis usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
 - Los datos de mercado se consultan desde Yahoo Finance.
-- Las imágenes se obtienen en varias capas: página del editor (JSON-LD/Open Graph), metadatos multimedia del RSS, GDELT DOC 2.0 (coincidencia de titular) y Brave Image Search opcional. Se descarga y se incrusta la primera imagen válida; si falla una URL se prueba la siguiente fuente. GDELT no requiere clave. Brave requiere `BRAVE_SEARCH_API_KEY`.
+- Las imágenes se obtienen en varias capas: página del editor (JSON-LD, Open Graph y etiquetas `img`/`srcset`/carga diferida), RSS, GDELT DOC 2.0, Openverse, Wikimedia Commons y Brave Image Search opcional. Se descargan y normalizan a JPEG mediante Pillow, con redimensionado y compresión para evitar correos demasiado pesados. Openverse y Commons no requieren claves; Brave requiere `BRAVE_SEARCH_API_KEY`. Las fuentes abiertas conservan información de autor/licencia cuando la API la proporciona.
 
 **Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
 
@@ -35,7 +35,7 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 | `GMAIL_APP_PASSWORD` | Sí | Contraseña de aplicación de Gmail |
 | `GMAIL_RECIPIENT` | No | Destinatario; si falta, se usa GMAIL_ADDRESS |
 | `GEMINI_API_KEY` | Recomendado | Clave de Gemini para selección y análisis editorial |
-| `BRAVE_SEARCH_API_KEY` | Opcional | Búsqueda adicional de imágenes cuando fallan las fuentes vinculadas al artículo |
+| `BRAVE_SEARCH_API_KEY` | Opcional | Búsqueda adicional de imágenes cuando fallan las fuentes gratuitas anteriores |
 
 ### Obtener BRAVE_SEARCH_API_KEY (opcional)
 
@@ -51,7 +51,7 @@ Si no se configura, el sistema sigue utilizando las imágenes del artículo, RSS
 2. Crea una API key para Gemini.
 3. Añádela en GitHub como secreto llamado exactamente `GEMINI_API_KEY`.
 
-El proyecto usa `gemini-3.1-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
+El proyecto usa `gemini-3.1-flash-lite` por defecto. Las pruebas de regresión de imágenes ejecutan 13 casos diez veces y una comprobación adicional con noticias RSS recientes. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
 Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error. Como respaldo, solo se muestran noticias RSS cuyo titular y extracto superan un filtro conservador de castellano; no se traducen ni se inventan contenidos. Las noticias que no superan ese filtro se omiten. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
