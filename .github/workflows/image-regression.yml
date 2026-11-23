@@ -40,3 +40,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: gemini-3.1-flash-lite
         run: python scripts/check_images_live.py
+
+      - name: Publicar galería para revisión visual
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-review-${{ github.run_number }}
+          path: image-samples/
+          if-no-files-found: ignore
+          retention-days: 7
