@@ -672,5 +672,130 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_35_rejects_gaza_photo_for_spanish_pensioner_story(self):
+        article = {
+            "section": "España y Gipuzkoa",
+            "headline": "Pensionistas españoles reclaman mejoras",
+            "original_headline": "Spanish pensioners demand improvements",
+            "summary": "Pensioners in Spain are asking for better conditions.",
+        }
+        descriptor = (
+            "Sitting room in Gaza Strip after attack on Shabora refugee camp "
+            "in Rafah, Palestine; several elderly people injured"
+        )
+        self.assertTrue(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+        self.assertEqual(
+            digest.image_candidate_relevance_score(
+                {**article, "_image_candidate_descriptors": {
+                    "https://img.example/gaza.jpg": descriptor,
+                }},
+                ("https://img.example/gaza.jpg", "commons", "", ""),
+            ),
+            0.0,
+        )
+
+    def test_36_rejects_toronto_stock_exchange_for_swiss_franc_story(self):
+        article = {
+            "section": "Economía y geopolítica",
+            "headline": "El franco suizo se aprecia frente al euro",
+            "original_headline": "Swiss franc gains against the euro",
+            "summary": "Investors turn to the Swiss franc.",
+        }
+        descriptor = "Floor of Toronto Stock Exchange 1956, Toronto, Canada"
+        self.assertTrue(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+
+    def test_37_rejects_brunei_photo_for_basque_sme_story(self):
+        article = {
+            "section": "España y Gipuzkoa",
+            "headline": "La innovación debe llegar a más pymes de Euskadi",
+            "original_headline": "Innovation must reach more Basque SMEs",
+            "summary": "The Basque Country seeks to improve SME competitiveness.",
+        }
+        descriptor = (
+            "Small Business Innovation Centre, Bandar Seri Begawan, Brunei; "
+            "British High Commission"
+        )
+        self.assertTrue(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+
+    def test_38_keeps_relevant_basque_government_photo(self):
+        article = {
+            "section": "España y Gipuzkoa",
+            "headline": "Pradales visita la sede del Gobierno Vasco",
+            "original_headline": "Pradales visits Basque Government headquarters",
+            "summary": "The Lehendakaritza is located in Vitoria-Gasteiz.",
+        }
+        descriptor = (
+            "Vitoria - Lehendakaritza, presidential offices of the Basque Government, "
+            "Vitoria-Gasteiz, Basque Country, Spain"
+        )
+        self.assertFalse(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+
+    def test_39_keeps_netherlands_server_room_for_data_centre_topic(self):
+        article = {
+            "section": "Ciencia, investigación y tecnología",
+            "headline": "Aragón regula los centros de datos",
+            "original_headline": "Aragon sets rules for data centres",
+            "summary": "New rules cover data centre infrastructure.",
+        }
+        descriptor = "DHL Netherlands local site computer room server racks"
+        self.assertFalse(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+
+    def test_40_gemini_query_merge_keeps_one_specific_query_and_two_fallbacks(self):
+        article = {
+            "id": "N040",
+            "section": "Economía y geopolítica",
+            "headline": "El franco suizo gana terreno frente al euro",
+            "original_headline": "Swiss franc gains against the euro",
+            "summary": "Investors seek safe currencies and increase demand for the Swiss franc.",
+        }
+        payload = json.dumps({
+            "queries": [{
+                "id": "N040",
+                "queries": [
+                    "Swiss franc banknotes currency",
+                    "Stock exchange trading floor",
+                ],
+            }]
+        })
+        with patch.object(digest, "gemini_request", return_value=payload):
+            queries = digest.generate_commons_queries([article], "test-key")
+
+        self.assertEqual(len(queries["N040"]), 3)
+        self.assertEqual(queries["N040"][0], "Swiss franc banknotes currency")
+        self.assertIn("Swiss National Bank headquarters Zurich", queries["N040"])
+        self.assertNotIn("Stock exchange trading floor", queries["N040"])
+
+    def test_41_gemini_query_without_story_overlap_is_discarded(self):
+        article = {
+            "id": "N041",
+            "section": "España y Gipuzkoa",
+            "headline": "Cuerpo compara a quienes ayudan a pensionistas",
+            "original_headline": "Cuerpo compares those who help pensioners",
+            "summary": "The minister discussed pensioner support in Spain.",
+        }
+        payload = json.dumps({
+            "queries": [{
+                "id": "N041",
+                "queries": ["Luxury car showroom nighttime", "Urban architecture"],
+            }]
+        })
+        with patch.object(digest, "gemini_request", return_value=payload):
+            queries = digest.generate_commons_queries([article], "test-key")
+
+        self.assertNotIn("Luxury car showroom nighttime", queries["N041"])
+        self.assertIn("pensioners elderly retirement Spain", queries["N041"])
+
+
+
 if __name__ == "__main__":
     unittest.main()
