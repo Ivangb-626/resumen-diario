@@ -8,6 +8,7 @@ from io import BytesIO
 import difflib
 import html
 import json
+import math
 import os
 import re
 import smtplib
@@ -339,7 +340,7 @@ def collect_stories() -> list[Story]:
     return stories
 
 
-def gemini_request(prompt: str, api_key: str) -> str:
+def gemini_request(prompt: str, api_key: str, retry_delays: tuple[int, ...] = (5, 15, 30)) -> str:
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -734,49 +735,176 @@ def fetch_openverse_image(article: dict[str, Any]) -> tuple[str, str]:
         return "", ""
 
 
-def fetch_commons_image(article: dict[str, Any]) -> tuple[str, str]:
-    """Search Wikimedia Commons by headline and require title/description overlap."""
-    original = str(article.get("original_headline") or article.get("headline") or "").strip()
-    if len(original) < 8:
-        return "", ""
-    params = urllib.parse.urlencode({
-        "action": "query", "generator": "search", "gsrsearch": original[:180],
-        "gsrnamespace": "6", "gsrlimit": "15",
-        "prop": "imageinfo", "iiprop": "url|extmetadata",
-        "iiurlwidth": "1200", "format": "json",
-    })
-    request = urllib.request.Request(
-        "https://commons.wikimedia.org/w/api.php?" + params,
-        headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-    )
+def fallback_image_query(article: dict[str, Any]) -> str:
+    """Build a compact Commons query without inventing context."""
+    title = str(article.get("original_headline") or article.get("headline") or "")
+    words = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]{3,}", title)
+    ignored = {
+        "the", "and", "for", "with", "from", "that", "this", "una", "uno",
+        "los", "las", "del", "por", "para", "con", "sobre", "entre", "como",
+        "este", "esta", "estos", "estas", "según", "tras", "desde", "hacia",
+        "entre", "sobre", "against", "over", "after", "before", "into",
+    }
+    selected = []
+    for word in words:
+        if word.lower() not in ignored and word.lower() not in {v.lower() for v in selected}:
+            selected.append(word)
+        if len(selected) >= 9:
+            break
+    return " ".join(selected)
+
+
+def generate_commons_queries(
+    articles: list[dict[str, Any]], api_key: str = ""
+) -> dict[str, list[str]]:
+    """Use Gemini to turn long headlines into precise, visual Commons search phrases."""
+    queries = {
+        str(article.get("id") or article.get("url")): [fallback_image_query(article)]
+        for article in articles
+    }
+    if not api_key or not articles:
+        return queries
+
+    records = [{
+        "id": str(article.get("id") or article.get("url")),
+        "headline": str(article.get("original_headline") or article.get("headline") or ""),
+        "summary": str(article.get("summary") or "")[:240],
+        "section": str(article.get("section") or ""),
+    } for article in articles]
+    prompt = f"""
+You prepare search queries for real photographs on Wikimedia Commons.
+For every news story below, create 1 or 2 short, concrete image-search phrases.
+Use named people, places, institutions, objects, events and visible scenes from
+the story. Prefer phrases likely to appear in a Commons file title or description.
+Translate abstract policy/economic language into the real-world subject that a
+photograph would depict, without inventing a scene or adding unrelated context.
+Keep important proper names. Queries should be 4-9 words, concise, and can be in
+English because Commons metadata is often in English. Do not return generic words
+such as "news", "business", "politics", "technology" or "people" on their own.
+Return JSON only:
+{{"queries":[{{"id":"N001","queries":["specific phrase one","specific phrase two"]}}]}}
+
+STORIES:
+{json.dumps(records, ensure_ascii=False)}
+"""
     try:
-        with urllib.request.urlopen(request, timeout=13) as response:
-            pages = json.loads(response.read().decode("utf-8", errors="replace")).get("query", {}).get("pages", {})
-        best_url, best_score, best_credit = "", 0.0, ""
+        raw = gemini_request(prompt, api_key, retry_delays=(2,))
+        data = json.loads(raw)
+        for item in data.get("queries", []):
+            story_id = str(item.get("id") or "")
+            values = item.get("queries") or []
+            if story_id not in queries or not isinstance(values, list):
+                continue
+            cleaned = []
+            for value in values:
+                phrase = re.sub(r"\s+", " ", str(value)).strip()[:120]
+                if len(phrase) >= 8 and phrase not in cleaned:
+                    cleaned.append(phrase)
+                if len(cleaned) >= 2:
+                    break
+            if cleaned:
+                queries[story_id] = cleaned
+        print(f"Gemini: consultas visuales preparadas para {sum(bool(v) for v in queries.values())}/{len(articles)} noticias.")
+    except Exception as exc:
+        print(f"Gemini no pudo afinar las consultas de imágenes ({type(exc).__name__}); se usan titulares.")
+    return queries
+
+
+def fetch_commons_candidates(
+    article: dict[str, Any], queries: list[str] | None = None
+) -> list[tuple[str, str, str, str]]:
+    """Search Wikimedia Commons with focused terms and return relevance-ranked photo candidates."""
+    original = str(article.get("original_headline") or article.get("headline") or "").strip()
+    search_queries = [q for q in (queries or []) if len(q.strip()) >= 6]
+    if not search_queries:
+        fallback = fallback_image_query(article)
+        if fallback:
+            search_queries = [fallback]
+    if not search_queries:
+        return []
+
+    article_id = str(article.get("id") or article.get("url") or "")
+    best: dict[str, tuple[float, str, str, str, str]] = {}
+
+    for query in search_queries[:2]:
+        params = urllib.parse.urlencode({
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": query[:160],
+            "gsrnamespace": "6",
+            "gsrlimit": "25",
+            "prop": "imageinfo",
+            "iiprop": "url|size|mime|extmetadata",
+            "iiurlwidth": "1200",
+            "format": "json",
+        })
+        request = urllib.request.Request(
+            "https://commons.wikimedia.org/w/api.php?" + params,
+            headers={
+                "User-Agent": USER_AGENT + " (news-photo-retrieval; contact: project repository)",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=18) as response:
+                pages = json.loads(response.read().decode("utf-8", errors="replace")).get("query", {}).get("pages", {})
+        except HTTPError as exc:
+            if exc.code == 429:
+                print(f"Commons HTTP 429 para {article_id}; se omite esa consulta.")
+            else:
+                print(f"Commons no disponible ({exc.code}) para {article_id}.")
+            continue
+        except Exception as exc:
+            print(f"Commons no disponible ({type(exc).__name__}) para {article_id}.")
+            continue
+
         for page in pages.values():
             info_list = page.get("imageinfo") or []
             if not info_list:
                 continue
             info = info_list[0]
+            mime = str(info.get("mime") or "")
+            width = int(info.get("width") or 0)
+            height = int(info.get("height") or 0)
+            if not mime.startswith("image/") or width < 600 or height < 350:
+                continue
+            ratio = width / max(1, height)
+            if ratio < 0.48 or ratio > 2.8:
+                continue
+
             meta = info.get("extmetadata") or {}
             object_name = clean_html(str((meta.get("ObjectName") or {}).get("value") or ""))
             description = clean_html(str((meta.get("ImageDescription") or {}).get("value") or ""))
-            title = str(page.get("title") or "")
-            score = max(
-                image_text_score(original, title),
-                image_text_score(original, object_name),
-                image_text_score(original, description),
-            )
+            title = str(page.get("title") or "").replace("File:", "").replace("_", " ")
+            descriptor = " ".join((title, object_name, description[:1800]))
+            score = max(image_text_score(query, descriptor) for query in search_queries[:2])
+            headline_score = image_text_score(original, descriptor)
+            score = max(score, headline_score * 0.72)
+
+            # Require at least one substantive shared term from the targeted query.
+            if score < 0.20:
+                continue
             candidate = usable_image_url(str(info.get("thumburl") or info.get("url") or ""))
-            if candidate and not image_url_is_generic(candidate) and score >= 0.36 and score > best_score:
-                best_url, best_score = candidate, score
-                artist = clean_html(str((meta.get("Artist") or {}).get("value") or ""))
-                license_name = clean_html(str((meta.get("LicenseShortName") or {}).get("value") or ""))
-                best_credit = " · ".join(part for part in (artist, license_name, "Wikimedia Commons") if part)
-        return best_url, best_credit
-    except Exception as exc:
-        print(f"Wikimedia Commons no disponible ({type(exc).__name__}: {str(exc)[:100]}).")
-        return "", ""
+            if not candidate or image_url_is_generic(candidate):
+                continue
+
+            artist = clean_html(str((meta.get("Artist") or {}).get("value") or ""))
+            license_name = clean_html(str((meta.get("LicenseShortName") or {}).get("value") or ""))
+            credit = " · ".join(
+                part for part in (artist, license_name, "Wikimedia Commons") if part
+            )
+            page_title = str(page.get("title") or "")
+            landing = "https://commons.wikimedia.org/wiki/" + urllib.parse.quote(page_title.replace(" ", "_"), safe=":_")
+            current = best.get(candidate)
+            record = (score, candidate, landing, credit, descriptor[:220])
+            if current is None or score > current[0]:
+                best[candidate] = record
+
+    ranked = sorted(best.values(), key=lambda item: item[0], reverse=True)[:5]
+    return [
+        (image_url, "commons", landing_url, credit)
+        for _score, image_url, landing_url, credit, _description in ranked
+    ]
 
 
 def fetch_brave_image(article: dict[str, Any], api_key: str) -> str:
@@ -821,8 +949,39 @@ def fetch_brave_image(article: dict[str, Any], api_key: str) -> str:
         return ""
 
 
+def inspect_photo_quality(image: Any) -> tuple[bool, str]:
+    """Reject blank pixels, tiny thumbnails and low-information placeholders."""
+    from PIL import ImageStat
+
+    width, height = image.size
+    if width < 320 or height < 200 or width * height < 100_000:
+        return False, f"resolución insuficiente ({width}x{height})"
+    ratio = width / max(1, height)
+    if ratio < 0.48 or ratio > 2.8:
+        return False, f"proporción no fotográfica ({width}x{height})"
+
+    sample = image.copy()
+    sample.thumbnail((72, 72))
+    gray = sample.convert("L")
+    stats = ImageStat.Stat(gray)
+    deviation = stats.stddev[0]
+    histogram = gray.histogram()
+    total = max(1, sum(histogram))
+    entropy = -sum(
+        (count / total) * math.log2(count / total)
+        for count in histogram if count
+    )
+    colors = len(sample.getcolors(maxcolors=6000) or [])
+    if deviation < 6.0 or entropy < 2.2 or colors < 18:
+        return False, (
+            f"imagen vacía/placeholder (desviación={deviation:.1f}, "
+            f"entropía={entropy:.2f}, colores={colors})"
+        )
+    return True, f"{width}x{height}; entropía={entropy:.1f}; colores={colors}"
+
+
 def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str] | None:
-    """Download and normalize a photo to JPEG so email clients can display modern formats."""
+    """Download, validate visual content and normalize images to email-safe JPEG."""
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/131.0 Safari/537.36",
@@ -835,11 +994,10 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
         with urllib.request.urlopen(request, timeout=20) as response:
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             data = response.read(8_000_001)
-        if not data or len(data) > 8_000_000:
+        if not data or len(data) > 8_000_000 or len(data) < 5_000:
             print(f"Imagen rechazada por tamaño ({len(data)} bytes): {urllib.parse.urlparse(image_url).netloc}.")
             return None
 
-        # Pillow converts WebP/AVIF/GIF/PNG to JPEG, which has the broadest email support.
         try:
             from PIL import Image, ImageOps
             try:
@@ -848,7 +1006,23 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
                 pass
             with Image.open(BytesIO(data)) as opened:
                 opened.seek(0)
-                image = ImageOps.exif_transpose(opened).convert("RGB")
+                oriented = ImageOps.exif_transpose(opened)
+                if "A" in oriented.getbands():
+                    rgba = oriented.convert("RGBA")
+                    background = Image.new("RGBA", rgba.size, "white")
+                    background.alpha_composite(rgba)
+                    image = background.convert("RGB")
+                else:
+                    image = oriented.convert("RGB")
+
+                valid, quality_note = inspect_photo_quality(image)
+                if not valid:
+                    print(
+                        f"Fotografía descartada ({quality_note}): "
+                        f"{urllib.parse.urlparse(image_url).netloc}."
+                    )
+                    return None
+
                 image.thumbnail((1400, 1000), Image.Resampling.LANCZOS)
                 output = BytesIO()
                 image.save(output, format="JPEG", quality=84, optimize=True, progressive=True)
@@ -861,7 +1035,6 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
                 return None
             return converted, "jpeg"
         except ImportError:
-            # The workflow installs Pillow. Keep a safe standard-format fallback for local use.
             if content_type in {"image/jpeg", "image/png"}:
                 return data, content_type.split("/", 1)[1]
             return None
@@ -872,7 +1045,6 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
     except Exception as exc:
         print(f"No se pudo descargar imagen ({urllib.parse.urlparse(image_url).netloc}: {type(exc).__name__}).")
         return None
-
 
 def download_first_available(candidates: list[tuple[str, str, str, str]]) -> tuple[bytes, str, str, str, str] | None:
     """Try each candidate in priority order and return the first embeddable image."""
@@ -913,17 +1085,48 @@ def embed_candidates(articles: list[dict[str, Any]], candidates: dict[int, list[
                 print(f"Error descargando fotografía ({type(exc).__name__}).")
 
 
-def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Try publisher, RSS, GDELT, Openverse, Commons and optionally Brave in sequence."""
+def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None:
+    """Search Wikimedia with Gemini-refined terms first, then fall back to story images."""
     articles = editorial.get("articles", [])
+    if not articles:
+        return
+    api_key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
     candidates: dict[int, list[tuple[str, str, str, str]]] = {id(a): [] for a in articles}
+    ids = {id(article): str(article.get("id") or article.get("url")) for article in articles}
 
-    # Round 1: extract every candidate from the original publisher page.
+    # First ask the existing text model to turn every headline into specific visual
+    # search terms. It does not create images; it improves Commons' metadata search.
+    queries_by_id = generate_commons_queries(articles, api_key)
+    for article in articles:
+        article["image_search_query"] = queries_by_id.get(ids[id(article)], [fallback_image_query(article)])[0]
+
+    # Wikimedia is deliberately first: it returned real raster photographs more
+    # consistently than the publisher metadata, which can point at blank placeholders.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {
+            pool.submit(fetch_commons_candidates, article, queries_by_id.get(ids[id(article)], [])): article
+            for article in articles
+        }
+        for future in as_completed(futures):
+            article = futures[future]
+            try:
+                candidates[id(article)].extend(future.result())
+            except Exception as exc:
+                print(f"Commons no pudo buscar para una noticia ({type(exc).__name__}).")
+    commons_count = sum(bool(candidates[id(article)]) for article in articles)
+    print(f"Wikimedia Commons: candidatas pertinentes para {commons_count}/{len(articles)} noticias.")
+
+    embed_candidates(articles, candidates)
+    print(
+        f"Tras Wikimedia Commons: "
+        f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
+    )
+
+    # Only unresolved stories fall back to publisher metadata and their own RSS media.
+    missing = [article for article in articles if not article.get("_image_data")]
     publisher_success = 0
-    # Google News and several publishers rate-limit bursts; two parallel page reads
-    # plus per-request retries are more reliable than a large concurrent fan-out.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {pool.submit(fetch_article_images, article): article for article in articles}
+        futures = {pool.submit(fetch_article_images, article): article for article in missing}
         for future in as_completed(futures):
             article = futures[future]
             try:
@@ -931,22 +1134,27 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 if image_urls:
                     publisher_success += 1
                 for image_url in image_urls:
-                    candidates[id(article)].append((image_url, "publisher", publisher_url or str(article.get("url") or ""), ""))
+                    candidates[id(article)].append((
+                        image_url, "publisher",
+                        publisher_url or str(article.get("url") or ""), "",
+                    ))
             except Exception as exc:
                 print(f"Extractor del medio falló ({type(exc).__name__}).")
-    print(f"Página del medio: {publisher_success}/{len(articles)} noticias con candidatas.")
-
-    # Round 2: RSS images, including Google News thumbnails and enclosure variants.
-    for article in articles:
+    for article in missing:
         rss_candidate = usable_image_url(str(article.get("rss_image_url") or ""))
         if rss_candidate and not image_url_is_generic(rss_candidate):
-            candidates[id(article)].append((rss_candidate, "rss", str(article.get("url") or ""), ""))
+            candidates[id(article)].append((
+                rss_candidate, "rss", str(article.get("url") or ""), ""
+            ))
+    embed_candidates(missing, candidates)
+    print(
+        f"Tras página del medio/RSS: "
+        f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)} "
+        f"(páginas con candidatas={publisher_success})."
+    )
 
-    embed_candidates(articles, candidates)
-    print(f"Tras página del medio + RSS: {sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}.")
-
-    # Round 3: GDELT. It is queried for every story, not only those whose URL field is empty.
-    missing = [a for a in articles if not a.get("_image_data")]
+    # External news indexes are reserved for the remaining stories.
+    missing = [article for article in articles if not article.get("_image_data")]
     gdelt_map = fetch_gdelt_images(missing)
     for article in missing:
         candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
@@ -955,44 +1163,29 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
     embed_candidates(missing, candidates)
     print(f"Tras GDELT: {sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}.")
 
-    # Round 4 and 5: free image indexes. Query only unresolved stories and keep
-    # license/creator metadata so the email can show attribution.
-    missing = [a for a in articles if not a.get("_image_data")]
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        openverse_futures = {pool.submit(fetch_openverse_image, article): article for article in missing}
-        for future in as_completed(openverse_futures):
-            article = openverse_futures[future]
+    missing = [article for article in articles if not article.get("_image_data")]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(fetch_openverse_image, article): article for article in missing}
+        for future in as_completed(futures):
+            article = futures[future]
             try:
                 url, credit = future.result()
                 if url:
-                    candidates[id(article)] = [(url, "openverse", str(article.get("url") or ""), credit)]
+                    candidates[id(article)] = [(
+                        url, "openverse", str(article.get("url") or ""), credit
+                    )]
             except Exception:
                 pass
     embed_candidates(missing, candidates)
     print(f"Tras Openverse: {sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}.")
 
-    missing = [a for a in articles if not a.get("_image_data")]
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        commons_futures = {pool.submit(fetch_commons_image, article): article for article in missing}
-        for future in as_completed(commons_futures):
-            article = commons_futures[future]
-            try:
-                url, credit = future.result()
-                if url:
-                    candidates[id(article)] = [(url, "commons", "https://commons.wikimedia.org/", credit)]
-            except Exception:
-                pass
-    embed_candidates(missing, candidates)
-    print(f"Tras Wikimedia Commons: {sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}.")
-
-    # Round 6: paid/optional Brave Image Search. All earlier sources work without a key.
     brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
     if brave_key:
-        missing = [a for a in articles if not a.get("_image_data")]
+        missing = [article for article in articles if not article.get("_image_data")]
         with ThreadPoolExecutor(max_workers=3) as pool:
-            brave_futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
-            for future in as_completed(brave_futures):
-                article = brave_futures[future]
+            futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
+            for future in as_completed(futures):
+                article = futures[future]
                 try:
                     url = future.result()
                     if url:
@@ -1000,18 +1193,16 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 except Exception:
                     pass
         embed_candidates(missing, candidates)
-    else:
-        print("Brave no configurado; se han probado las fuentes gratuitas alternativas.")
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     source_counts: dict[str, int] = {}
     for article in articles:
         if article.get("_image_data"):
-            source = str(article.get("image_source") or "publisher")
-            source_counts[source] = source_counts.get(source, 0) + 1
+            origin = str(article.get("image_source") or "desconocido")
+            source_counts[origin] = source_counts.get(origin, 0) + 1
     print(
         f"IMÁGENES FINAL: {attached}/{len(articles)}. "
-        f"Fuentes={source_counts}. Sin fotografía incrustada={len(articles) - attached}."
+        f"Fuentes={source_counts}. Sin fotografía válida={len(articles) - attached}."
     )
 
 
@@ -1356,7 +1547,7 @@ def main() -> int:
         f"activos principales: {len(markets)}; mayores subidas: {len(movers_up)}; "
         f"mayores bajadas: {len(movers_down)}"
     )
-    prepare_article_images(editorial)
+    prepare_article_images(editorial, api_key)
     message = build_email(editorial, markets, movers_up, movers_down, ai_used, ai_error)
     send_email(message, address, recipient, app_password)
     print("Correo enviado correctamente.")
