@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import email.utils
+import difflib
 import html
 import json
 import os
@@ -404,6 +405,7 @@ CANDIDATOS:
         item["source_name"] = source.source
         item["published"] = source.published.isoformat()
         item["image_url"] = source.image_url
+        item["original_headline"] = source.title
         seen.add(sid)
         articles.append(item)
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
@@ -451,6 +453,7 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
             "url": story.link,
             "published": story.published.isoformat(),
             "image_url": story.image_url,
+            "original_headline": story.title,
         })
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
     articles.sort(key=lambda item: item.get("published", ""), reverse=True)
@@ -463,8 +466,31 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
 
 
 
+def image_text_score(left: str, right: str) -> float:
+    """Conservative title similarity score for matching external image results."""
+    def tokens(value: str) -> set[str]:
+        words = re.findall(r"[a-záéíóúüñ0-9]{3,}", (value or "").lower())
+        ignored = {"the", "and", "for", "with", "from", "that", "this", "una", "uno",
+                   "los", "las", "del", "por", "para", "con", "sobre", "entre"}
+        return {word for word in words if word not in ignored}
+    a, b = tokens(left), tokens(right)
+    if not a or not b:
+        return 0.0
+    overlap = len(a & b) / max(1, min(len(a), len(b)))
+    sequence = difflib.SequenceMatcher(None, " ".join(sorted(a)), " ".join(sorted(b))).ratio()
+    return max(overlap, sequence)
+
+
+def image_url_is_generic(image_url: str) -> bool:
+    path = urllib.parse.urlparse(image_url).path.lower()
+    return any(term in path for term in (
+        "logo", "avatar", "favicon", "placeholder", "default-image",
+        "default_image", "brandmark", "masthead", "sprite", "icon"
+    ))
+
+
 def fetch_article_image(article: dict[str, Any]) -> tuple[str, str]:
-    """Get the lead image from the publisher's own article metadata, never fuzzy image search."""
+    """First choice: lead image explicitly attached to the exact publisher article."""
     article_url = str(article.get("url", "")).strip()
     if not article_url:
         return "", ""
@@ -481,30 +507,123 @@ def fetch_article_image(article: dict[str, Any]) -> tuple[str, str]:
             page = response.read(2_500_000).decode("utf-8", errors="replace")
         parser = ArticleImageParser()
         parser.feed(page)
-
-        # Structured NewsArticle image is the strongest signal: the publisher
-        # explicitly associates it with this exact article.
         candidates: list[str] = []
         for block in parser.jsonld_blocks:
             candidates.extend(jsonld_article_images(block))
-        # OG/Twitter are page-level metadata, used only after structured article data.
         candidates.extend(parser.meta_images)
-
         for candidate in candidates:
             image_url = usable_image_url(candidate, final_url)
-            if not image_url:
+            if not image_url or image_url_is_generic(image_url):
                 continue
             host = urllib.parse.urlparse(image_url).netloc.lower()
             if "google.com" in host or "googleusercontent.com" in host:
                 continue
             return image_url, final_url
     except Exception as exc:
-        print(f"No se pudo extraer imagen del medio ({type(exc).__name__}: {str(exc)[:120]}).")
+        print(f"No se pudo extraer imagen del artículo ({type(exc).__name__}: {str(exc)[:120]}).")
     return "", ""
 
 
+def fetch_gdelt_images(articles: list[dict[str, Any]]) -> dict[str, str]:
+    """Find social images for the same stories in GDELT's global news index."""
+    missing = [a for a in articles if not a.get("image_url")]
+    if not missing:
+        return {}
+    # One batched query avoids hammering GDELT's rate-limited public API.
+    titles = [str(a.get("original_headline") or a.get("headline") or "").strip()
+              for a in missing]
+    titles = [t for t in titles if len(t) >= 12]
+    if not titles:
+        return {}
+    # Keep the URL manageable; GDELT accepts exact-phrase OR groups.
+    query = "(" + " OR ".join('"' + t.replace('"', " ")[:180] + '"' for t in titles[:18]) + ")"
+    params = urllib.parse.urlencode({
+        "query": query, "mode": "artlist", "format": "json",
+        "timespan": "3d", "maxrecords": "250", "sort": "HybridRel",
+    })
+    request = urllib.request.Request(
+        "https://api.gdeltproject.org/api/v2/doc/doc?" + params,
+        headers={"User-Agent": USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        matches = payload.get("articles", [])
+        mapped: dict[str, str] = {}
+        for article in missing:
+            original = str(article.get("original_headline") or article.get("headline") or "")
+            article_domain = (urllib.parse.urlparse(str(article.get("url", ""))).hostname or "").lower()
+            best_url, best_score = "", 0.0
+            for candidate in matches:
+                candidate_image = usable_image_url(str(candidate.get("socialimage") or ""))
+                candidate_title = str(candidate.get("title") or "")
+                candidate_domain = str(candidate.get("domain") or "").lower()
+                score = image_text_score(original, candidate_title)
+                same_domain = bool(article_domain and (
+                    candidate_domain == article_domain or candidate_domain.endswith("." + article_domain)
+                    or article_domain.endswith("." + candidate_domain)
+                ))
+                if candidate_image and not image_url_is_generic(candidate_image):
+                    # Exact title match is strong; syndicated copies require a higher
+                    # threshold when the publisher domain differs.
+                    threshold = 0.48 if same_domain else 0.68
+                    if score >= threshold and score > best_score:
+                        best_url, best_score = candidate_image, score
+            if best_url:
+                mapped[str(article.get("id") or article.get("url"))] = best_url
+        print(f"GDELT: imágenes de artículos coincidentes para {len(mapped)}/{len(missing)} noticias.")
+        return mapped
+    except Exception as exc:
+        print(f"GDELT no disponible para imágenes ({type(exc).__name__}: {str(exc)[:120]}).")
+        return {}
+
+
+def fetch_brave_image(article: dict[str, Any], api_key: str) -> str:
+    """Optional final discovery source; accept only results whose title matches the story."""
+    original = str(article.get("original_headline") or article.get("headline") or "").strip()
+    if not original:
+        return ""
+    source = str(article.get("source_name") or "")
+    query = " ".join(part for part in (original[:220], source) if part)
+    params = urllib.parse.urlencode({
+        "q": query, "count": "12", "country": "ALL",
+        "search_lang": "en", "safesearch": "strict",
+    })
+    request = urllib.request.Request(
+        "https://api.search.brave.com/res/v1/images/search?" + params,
+        headers={
+            "X-Subscription-Token": api_key,
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        best_url, best_score = "", 0.0
+        for result in payload.get("results", []):
+            title = str(result.get("title") or "")
+            score = image_text_score(original, title)
+            props = result.get("properties") or {}
+            candidate = usable_image_url(str(props.get("url") or ""))
+            if not candidate:
+                thumb = result.get("thumbnail") or {}
+                candidate = usable_image_url(str(thumb.get("src") or ""))
+            width = props.get("width") or 0
+            height = props.get("height") or 0
+            if candidate and not image_url_is_generic(candidate) and score >= 0.52:
+                if width and height and (width < 400 or height < 220):
+                    continue
+                if score > best_score:
+                    best_url, best_score = candidate, score
+        return best_url
+    except Exception as exc:
+        print(f"Brave Image Search no disponible ({type(exc).__name__}: {str(exc)[:100]}).")
+        return ""
+
+
 def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
-    """Download a small JPEG/PNG image for reliable inline email display."""
+    """Download a raster image for reliable inline email display."""
     request = urllib.request.Request(
         image_url,
         headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
@@ -512,43 +631,26 @@ def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
     try:
         with urllib.request.urlopen(request, timeout=18) as response:
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            if content_type not in {"image/jpeg", "image/png"}:
+            if content_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
                 return None
             data = response.read(1_500_001)
         if not data or len(data) > 1_500_000:
             return None
         subtype = content_type.split("/", 1)[1]
-        return data, subtype
-    except Exception as exc:
-        print(f"No se pudo descargar imagen {urllib.parse.urlparse(image_url).netloc} ({type(exc).__name__}).")
-        return None
-
-def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
-    """Download a small raster image suitable for embedding in an email."""
-    request = urllib.request.Request(
-        image_url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            if content_type not in {"image/jpeg", "image/png", "image/gif"}:
-                return None
-            data = response.read(1_000_001)
-        if not data or len(data) > 1_000_000:
+        # Email clients do not consistently support WebP inline; convert only by
+        # avoiding it here and allowing the next candidate to be tried instead.
+        if subtype == "webp":
             return None
-        subtype = content_type.split("/", 1)[1]
         return data, subtype
     except Exception as exc:
-        print(f"No se pudo adjuntar una imagen ({type(exc).__name__}).")
+        print(f"No se pudo descargar imagen ({urllib.parse.urlparse(image_url).netloc}: {type(exc).__name__}).")
         return None
 
 
 def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Use publisher-verified article lead images; omit images when relevance is uncertain."""
+    """Use several article-linked sources, in order, and avoid generic/unrelated photos."""
     articles = editorial.get("articles", [])
-    # Do not use Commons keyword matches or Google News feed thumbnails: they can be
-    # visually unrelated. The image must come from this article page's own JSON-LD/OG.
+    # Tier 1: publisher's own JSON-LD / Open Graph article image.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_article_image, article): article for article in articles}
         for future in as_completed(futures):
@@ -558,9 +660,48 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 article["image_url"] = image_url
                 if image_url:
                     article["image_source_page"] = publisher_url
+                    article["image_source"] = "publisher"
             except Exception:
                 article["image_url"] = ""
 
+    # Tier 2: original RSS media:content / media:thumbnail / enclosure.
+    for article in articles:
+        if not article.get("image_url"):
+            rss_candidate = usable_image_url(str(article.get("rss_image_url") or article.get("image_url") or ""))
+            if rss_candidate and not image_url_is_generic(rss_candidate):
+                article["image_url"] = rss_candidate
+                article["image_source"] = "rss"
+
+    # Tier 3: GDELT socialimage, matched against the exact original headline.
+    gdelt_map = fetch_gdelt_images(articles)
+    for article in articles:
+        if not article.get("image_url"):
+            candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
+            if candidate:
+                article["image_url"] = candidate
+                article["image_source"] = "gdelt"
+
+    # Tier 4: optional Brave Image Search. Add BRAVE_SEARCH_API_KEY to GitHub
+    # Actions secrets to enable it; strict headline matching is applied.
+    brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+    if brave_key:
+        missing = [a for a in articles if not a.get("image_url")]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    candidate = future.result()
+                    if candidate:
+                        article["image_url"] = candidate
+                        article["image_source"] = "brave"
+                except Exception:
+                    pass
+    else:
+        print("Brave Image Search omitido: falta el secreto opcional BRAVE_SEARCH_API_KEY.")
+
+    # Download candidates; failed formats/hosts fall through to the next available
+    # source in later runs rather than embedding broken or unsupported content.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(download_inline_image, str(article.get("image_url", ""))): (index, article)
@@ -582,9 +723,14 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 article["image_url"] = ""
 
     attached = sum(1 for article in articles if article.get("_image_data"))
+    source_counts: dict[str, int] = {}
+    for article in articles:
+        if article.get("_image_data"):
+            source = str(article.get("image_source") or "publisher")
+            source_counts[source] = source_counts.get(source, 0) + 1
     print(
-        f"Imágenes verificadas del propio artículo e incrustadas: {attached}/{len(articles)}. "
-        f"Sin imagen fiable: {len(articles) - attached}."
+        f"Imágenes incrustadas: {attached}/{len(articles)}. "
+        f"Por fuente: {source_counts}. Sin imagen descargable: {len(articles) - attached}."
     )
 
 
