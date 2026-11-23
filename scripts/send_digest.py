@@ -11,6 +11,7 @@ import re
 import smtplib
 import ssl
 import sys
+import time
 import urllib.parse
 import urllib.request
 from urllib.error import HTTPError
@@ -254,9 +255,23 @@ def gemini_request(prompt: str, api_key: str) -> str:
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=90) as response:
-        result = json.loads(response.read().decode("utf-8"))
-    return result["candidates"][0]["content"]["parts"][0]["text"]
+    # Temporary capacity errors (especially HTTP 503) are common; retry with backoff.
+    retry_delays = (5, 15, 30)
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            return result["candidates"][0]["content"]["parts"][0]["text"]
+        except HTTPError as exc:
+            if exc.code not in {429, 500, 502, 503, 504} or attempt >= len(retry_delays):
+                raise
+            delay = retry_delays[attempt]
+            print(
+                f"Gemini devuelve HTTP {exc.code}; reintento {attempt + 1}/"
+                f"{len(retry_delays)} en {delay} segundos…",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def editorial_selection(stories: list[Story], api_key: str) -> dict[str, Any]:
@@ -347,10 +362,53 @@ CANDIDATOS:
     return {"articles": articles}
 
 
+def is_probably_spanish(text: str) -> bool:
+    """Conservative offline language check for RSS-only fallback content."""
+    normalized = f" {text.lower()} "
+    markers = {
+        " el ", " la ", " los ", " las ", " un ", " una ", " unos ", " unas ",
+        " de ", " del ", " que ", " y ", " en ", " por ", " para ", " con ",
+        " como ", " sobre ", " entre ", " desde ", " según ", " tras ",
+        " este ", " esta ", " estos ", " estas ", " será ", " han ", " hay ",
+        " más ", " también ", " nuevo ", " nueva ", " gobierno ", " país ",
+    }
+    return sum(1 for marker in markers if marker in normalized) >= 2
+
+
 def fallback_selection(stories: list[Story]) -> dict[str, Any]:
-    """Do not publish untranslated RSS headlines when Gemini is unavailable."""
-    print("Se omiten las noticias RSS sin traducción al castellano.", file=sys.stderr)
-    return {"articles": []}
+    """Publish only clearly Spanish RSS items; never expose untranslated headlines."""
+    articles: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for story in sorted(stories, key=lambda item: item.published, reverse=True):
+        combined = f"{story.title}. {story.excerpt}"
+        if not story.excerpt or not is_probably_spanish(combined):
+            continue
+        key = re.sub(r"[^a-z0-9áéíóúüñ]+", "", story.title.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        articles.append({
+            "id": story.id,
+            "section": story.section,
+            "headline": story.title,
+            "summary": story.excerpt[:500],
+            "why_it_matters": (
+                "Se incluye como información de actualidad procedente del feed RSS. "
+                "Al no estar disponible el análisis editorial, conviene consultar la fuente."
+            ),
+            "source_name": story.source,
+            "url": story.link,
+            "published": story.published.isoformat(),
+            "image_url": story.image_url,
+        })
+    order = {name: index for index, (name, _) in enumerate(SECTIONS)}
+    articles.sort(key=lambda item: item.get("published", ""), reverse=True)
+    articles.sort(key=lambda item: order.get(item.get("section"), 99))
+    print(
+        f"Respaldo RSS: {len(articles)} noticias con indicios suficientes de estar en castellano.",
+        file=sys.stderr,
+    )
+    return {"articles": articles}
 
 
 
@@ -532,9 +590,9 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
                 plain.append(f"Imagen: {article['image_url']}")
     if not ai_used:
         if not os.environ.get("GEMINI_API_KEY", "").strip():
-            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
+            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran solo noticias RSS identificadas como probablemente escritas en castellano, sin análisis editorial.")
         else:
-            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
+            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran solo noticias RSS identificadas como probablemente escritas en castellano, sin análisis editorial.")
     msg.set_content("\n".join(plain))
 
     cards = []
@@ -607,7 +665,7 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
             "<p style='padding:10px;background:#fff7ed;color:#9a3412;font-size:12px'>"
             "La clave GEMINI_API_KEY sí está presente, pero la llamada a Gemini ha fallado. "
             f"Motivo comunicado por la API: {html.escape(ai_error or 'error no identificado')}."
-            " Se ha utilizado el modo RSS como respaldo.</p>"
+            " Se ha utilizado el modo RSS como respaldo, mostrando únicamente noticias que parecen estar redactadas en castellano.</p>"
         )
     html_body = f"""<!doctype html><html lang="es"><body style="margin:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a">
     <main style="max-width:720px;margin:24px auto;padding:28px;background:#fff;border:1px solid #e2e8f0;border-radius:12px">
@@ -615,7 +673,7 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
       <h1 style="font-size:27px;margin:0 0 6px">Tu resumen diario</h1>
       <p style="font-size:14px;color:#64748b;margin:0 0 18px">{html.escape(spanish_date(now))} · Novedades de las últimas 24 horas</p>
       {note}{market_html}
-      {''.join(cards) if cards else '<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>'}
+      {''.join(cards) if cards else ('<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>' if ai_used else '<p>Gemini no ha podido completar el análisis y no se han encontrado noticias RSS que podamos identificar con suficiente confianza como contenido en castellano. El seguimiento de mercados sí está disponible.</p>')}
       <p style="font-size:11px;line-height:1.5;color:#64748b;margin:24px 0 0">Las noticias se seleccionan a partir de feeds RSS. Los datos de mercado proceden de Yahoo Finance y pueden tener retraso. Verifica los datos antes de tomar decisiones de inversión.</p>
     </main></body></html>"""
     msg.add_alternative(html_body, subtype="html")
