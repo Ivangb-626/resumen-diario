@@ -412,24 +412,55 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
 
 
 
-def fetch_article_image(article_url: str) -> str:
-    """Read an article page only to discover its Open Graph preview image."""
+def fetch_relevant_image(article: dict[str, Any]) -> tuple[str, str]:
+    """Find a story-specific photograph on Wikimedia Commons using its headline and summary."""
+    headline = str(article.get("headline", "")).strip()
+    summary = str(article.get("summary", "")).strip()
+    query = " ".join((headline, summary[:220])).strip()[:320]
+    if not query:
+        return "", ""
+
+    params = urllib.parse.urlencode({
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": query,
+        "gsrnamespace": 6,
+        "gsrlimit": 8,
+        "prop": "imageinfo",
+        "iiprop": "url|mime|size|extmetadata",
+        "iiurlwidth": 900,
+        "format": "json",
+    })
     request = urllib.request.Request(
-        article_url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
+        "https://commons.wikimedia.org/w/api.php?" + params,
+        headers={"User-Agent": USER_AGENT + " (news image lookup)"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=12) as response:
-            content_type = response.headers.get("Content-Type", "").lower()
-            if "text/html" not in content_type:
-                return ""
-            page = response.read(1_500_000).decode("utf-8", errors="replace")
-        parser = ImageMetaParser()
-        parser.feed(page)
-        return usable_image_url(parser.image_url, article_url)
+        with urllib.request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        pages = payload.get("query", {}).get("pages", {})
+        # Wikimedia's search order is relevance-ranked. Reject icons, tiny files and
+        # formats that the email attachment pipeline cannot safely embed.
+        candidates = sorted(pages.values(), key=lambda page: page.get("index", 999))
+        for page in candidates:
+            info = (page.get("imageinfo") or [{}])[0]
+            mime = info.get("mime", "")
+            width, height = info.get("width", 0), info.get("height", 0)
+            image_url = usable_image_url(info.get("thumburl") or info.get("url", ""))
+            if mime not in {"image/jpeg", "image/png"} or min(width, height) < 350 or not image_url:
+                continue
+            metadata = info.get("extmetadata", {})
+            license_name = clean_html(metadata.get("LicenseShortName", {}).get("value", ""))
+            artist = clean_html(metadata.get("Artist", {}).get("value", ""))
+            description_url = usable_image_url(info.get("descriptionurl", ""))
+            credit_parts = [part for part in (artist, license_name) if part]
+            credit = " · ".join(credit_parts)
+            if description_url:
+                credit = f"{credit} · {description_url}" if credit else description_url
+            return image_url, credit
     except Exception as exc:
-        print(f"Imagen del artículo no disponible ({type(exc).__name__}).")
-        return ""
+        print(f"Búsqueda de imagen relacionada no disponible ({type(exc).__name__}).")
+    return "", ""
 
 
 def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
@@ -454,18 +485,21 @@ def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
 
 
 def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Resolve and download story thumbnails before composing the MIME email."""
+    """Find a relevant Commons photograph for each story, then embed it in the email."""
     articles = editorial.get("articles", [])
-    # First discover missing image URLs from the selected articles only.
-    missing = [a for a in articles if not usable_image_url(str(a.get("image_url", "")))]
+    # Always search from the actual headline and summary first; RSS/Google News
+    # thumbnails are only retained as a fallback when Commons has no good match.
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_article_image, str(a.get("url", ""))): a for a in missing}
+        futures = {pool.submit(fetch_relevant_image, article): article for article in articles}
         for future in as_completed(futures):
             article = futures[future]
             try:
-                article["image_url"] = future.result()
+                image_url, credit = future.result()
+                if image_url:
+                    article["image_url"] = image_url
+                    article["image_credit"] = credit
             except Exception:
-                article["image_url"] = ""
+                pass
 
     # Download thumbnails in parallel, keeping the total message reasonably small.
     with ThreadPoolExecutor(max_workers=6) as pool:
@@ -660,9 +694,17 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
                     "alt='Imagen de la noticia' style='display:block;width:100%;max-width:620px;"
                     "height:auto;max-height:340px;object-fit:cover;border-radius:8px;margin:0 0 12px'>"
                 )
+            image_credit_html = ""
+            if article.get("image_credit"):
+                credit = html.escape(str(article["image_credit"]))
+                image_credit_html = (
+                    f"<p style='font-size:10px;color:#64748b;margin:-7px 0 10px'>"
+                    f"Imagen: {credit}</p>"
+                )
             entries.append(f"""
             <article style="padding:17px 0;border-bottom:1px solid #e5e7eb">
               {image_html}
+              {image_credit_html}
               <h3 style="font-size:17px;line-height:1.4;margin:0 0 8px">
                 <a href="{html.escape(article.get('url', ''), quote=True)}" style="color:#1d4ed8;text-decoration:none">{html.escape(article.get('headline', 'Noticia'))}</a>
               </h3>
