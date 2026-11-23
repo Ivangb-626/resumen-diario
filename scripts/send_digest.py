@@ -866,9 +866,9 @@ def fallback_visual_queries(article: dict[str, Any]) -> list[str]:
         ]
     elif any(term in text for term in ("pyme", "pymes", "small business", "small and medium", "emprend")):
         queries = [
-            "small business owners workshop Spain",
-            "small entrepreneurs local business office",
-            "Basque Country small manufacturing company workshop",
+            "Basque Country SME entrepreneurs workshop Euskadi",
+            "Euskadi small business owners innovation centre",
+            "Bilbao Basque SME manufacturing business",
         ]
     elif any(term in text for term in ("adamuz", "accidente ferrovi", "accident train", "railway accident", "ferrovi", "tren", "railway safety")):
         queries = [
@@ -886,7 +886,7 @@ def fallback_visual_queries(article: dict[str, Any]) -> list[str]:
         queries = [
             "pensioners elderly retirement Spain",
             "elderly pensioners demonstration Spain",
-            "Spanish social security pension office",
+            "senior citizens pensioners social centre Spain",
         ]
     elif any(term in text for term in ("franc suizo", "swiss franc", "franco suizo", "currency exchange", "divisa", "divisas", "exchange rate")):
         queries = [
@@ -1494,7 +1494,7 @@ def download_ranked_candidates(
         # During a Gemini outage, choose the strongest metadata match, not the first
         # downloadable URL. Exact publisher/RSS provenance remains a useful signal.
         for candidate, data, heuristic_score in downloaded:
-            if heuristic_score >= 0.22:
+            if heuristic_score >= 0.32:
                 url, source, _referer, credit = candidate[:4]
                 choices.append((
                     heuristic_score, (data, "jpeg", url, source, credit), "metadata"
