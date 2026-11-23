@@ -460,6 +460,7 @@ class ArticleImageTests(unittest.TestCase):
                 item["_image_subtype"] = "jpeg"
                 item["_image_cid"] = "test-image"
                 item["image_source"] = "test"
+                item["image_url"] = "https://img.example/unique-N026.jpg"
 
         with patch.object(
             digest, "generate_commons_queries",
