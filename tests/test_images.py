@@ -515,5 +515,101 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_28_google_news_thumbnail_offers_upscaled_cdn_variants(self):
+        url = "https://lh3.googleusercontent.com/news-image=w300-h300-p-k-no-nu"
+        variants = digest.google_image_url_variants(url)
+        self.assertEqual(
+            variants[0],
+            "https://lh3.googleusercontent.com/news-image=w1200-h800",
+        )
+        self.assertIn("=s1600", variants[1])
+        self.assertEqual(variants[-1], url)
+        self.assertEqual(
+            digest.google_image_url_variants("https://cdn.example/photo.jpg"),
+            ["https://cdn.example/photo.jpg"],
+        )
+
+    def test_29_thematic_fallback_searches_are_story_specific(self):
+        queries = digest.fallback_visual_queries({
+            "headline": "El franco suizo se aprecia ante la cautela de los inversores",
+            "section": "Economía y geopolítica",
+        })
+        self.assertIn("Swiss franc banknotes currency exchange", queries)
+        self.assertIn("Swiss National Bank headquarters Zurich", queries)
+        self.assertFalse(any("city skyline" in query for query in queries))
+
+    def test_30_commons_rejects_candidates_with_only_one_shared_generic_word(self):
+        payload = {
+            "query": {
+                "pages": {
+                    "1": {
+                        "title": "File:Swiss city skyline.jpg",
+                        "imageinfo": [{
+                            "mime": "image/jpeg", "width": 1800, "height": 1200,
+                            "thumburl": "https://upload.wikimedia.org/swiss-city.jpg",
+                            "extmetadata": {
+                                "ObjectName": {"value": "Swiss city skyline"},
+                                "ImageDescription": {"value": "A generic skyline of a Swiss city"},
+                            },
+                        }],
+                    }
+                }
+            }
+        }
+        article = {
+            "id": "N030",
+            "headline": "El franco suizo gana valor frente al euro",
+            "original_headline": "Swiss franc gains against the euro",
+        }
+        response = FakeResponse(json.dumps(payload).encode(), "application/json")
+        with patch.object(digest.urllib.request, "urlopen", return_value=response):
+            results = digest.fetch_commons_candidates(
+                article, ["Swiss franc banknotes currency"]
+            )
+        self.assertEqual(results, [])
+
+    def test_31_story_theme_fallback_never_searches_a_shared_generic_city_pool(self):
+        article = {
+            "id": "N031",
+            "headline": "El franco suizo gana valor frente al euro",
+            "original_headline": "Swiss franc gains against the euro",
+            "summary": "Investors seek safe currencies.",
+            "section": "Economía y geopolítica",
+            "url": "https://publisher.example/story",
+            "rss_image_url": "",
+        }
+        calls = []
+
+        def commons(story, queries=None):
+            calls.append((story.get("id"), list(queries or [])))
+            return []
+
+        with patch.object(
+            digest, "generate_commons_queries",
+            return_value={"N031": ["Swiss franc exchange rate"]},
+        ), patch.object(
+            digest, "fetch_commons_candidates", side_effect=commons,
+        ), patch.object(
+            digest, "fetch_article_images",
+            return_value=([], "https://publisher.example/story"),
+        ), patch.object(
+            digest, "fetch_gdelt_images", return_value={},
+        ), patch.object(
+            digest, "fetch_openverse_image", return_value=("", ""),
+        ), patch.object(
+            digest, "embed_candidates",
+        ), patch.dict("os.environ", {"BRAVE_SEARCH_API_KEY": ""}):
+            digest.prepare_article_images({"articles": [article]}, api_key="")
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(story_id == "N031" for story_id, _queries in calls))
+        self.assertFalse(any(
+            "city skyline" in query or "street photography" in query
+            for _story_id, queries in calls for query in queries
+        ))
+        self.assertFalse(article.get("_image_data"))
+
+
+
 if __name__ == "__main__":
     unittest.main()
