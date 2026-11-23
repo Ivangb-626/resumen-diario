@@ -131,14 +131,8 @@ class ArticleImageTests(unittest.TestCase):
 
     def test_12_webp_is_converted_to_email_safe_jpeg(self):
         buffer = io.BytesIO()
-        from PIL import ImageDraw
-        image = Image.new("RGB", (500, 350), "white")
-        draw = ImageDraw.Draw(image)
-        for index in range(25):
-            x0 = index * 20
-            draw.rectangle((x0, 0, x0 + 19, 349),
-                           fill=((index * 37) % 255, (index * 71) % 255, (index * 113) % 255))
-        image.save(buffer, format="WEBP")
+        image = Image.effect_noise((500, 350), 90).convert("RGB")
+        image.save(buffer, format="WEBP", quality=90)
         response = FakeResponse(buffer.getvalue(), "image/webp",
                                 "https://cdn.example/image.webp")
         with patch.object(digest.urllib.request, "urlopen", return_value=response):
