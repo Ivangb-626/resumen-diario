@@ -413,55 +413,85 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
 
 
 def fetch_relevant_image(article: dict[str, Any]) -> tuple[str, str]:
-    """Find a story-specific photograph on Wikimedia Commons using its headline and summary."""
+    """Find a story-specific Commons image using several progressively broader queries."""
     headline = str(article.get("headline", "")).strip()
     summary = str(article.get("summary", "")).strip()
-    query = " ".join((headline, summary[:220])).strip()[:320]
-    if not query:
+    if not headline:
         return "", ""
 
-    params = urllib.parse.urlencode({
-        "action": "query",
-        "generator": "search",
-        "gsrsearch": query,
-        "gsrnamespace": 6,
-        "gsrlimit": 8,
-        "prop": "imageinfo",
-        "iiprop": "url|mime|size|extmetadata",
-        "iiurlwidth": 900,
-        "format": "json",
-    })
-    request = urllib.request.Request(
-        "https://commons.wikimedia.org/w/api.php?" + params,
-        headers={"User-Agent": USER_AGENT + " (news image lookup)"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        pages = payload.get("query", {}).get("pages", {})
-        # Wikimedia's search order is relevance-ranked. Reject icons, tiny files and
-        # formats that the email attachment pipeline cannot safely embed.
-        candidates = sorted(pages.values(), key=lambda page: page.get("index", 999))
-        for page in candidates:
-            info = (page.get("imageinfo") or [{}])[0]
-            mime = info.get("mime", "")
-            width, height = info.get("width", 0), info.get("height", 0)
-            image_url = usable_image_url(info.get("thumburl") or info.get("url", ""))
-            if mime not in {"image/jpeg", "image/png"} or min(width, height) < 350 or not image_url:
-                continue
-            metadata = info.get("extmetadata", {})
-            license_name = clean_html(metadata.get("LicenseShortName", {}).get("value", ""))
-            artist = clean_html(metadata.get("Artist", {}).get("value", ""))
-            description_url = usable_image_url(info.get("descriptionurl", ""))
-            credit_parts = [part for part in (artist, license_name) if part]
-            credit = " · ".join(credit_parts)
-            if description_url:
-                credit = f"{credit} · {description_url}" if credit else description_url
-            return image_url, credit
-    except Exception as exc:
-        print(f"Búsqueda de imagen relacionada no disponible ({type(exc).__name__}).")
+    # Full Spanish headlines often match poorly in Commons. Try the headline first,
+    # then a compact keyword query that keeps names, places and concrete subjects.
+    stopwords = {
+        "sobre", "desde", "hasta", "entre", "tras", "ante", "para", "como", "donde",
+        "cuando", "porque", "este", "esta", "estos", "estas", "también", "según",
+        "hacia", "contra", "pero", "porque", "their", "about", "after", "before",
+        "with", "from", "that", "this", "will", "into", "over", "under",
+    }
+    words = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9-]{2,}", headline)
+    keywords = [word for word in words if word.lower() not in stopwords]
+    compact = " ".join(keywords[:7])
+    queries = list(dict.fromkeys(q for q in (headline[:180], compact, " ".join(keywords[:4])) if q))
+
+    for query in queries:
+        params = urllib.parse.urlencode({
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": query,
+            "gsrnamespace": 6,
+            "gsrlimit": 10,
+            "prop": "imageinfo",
+            "iiprop": "url|mime|size|extmetadata",
+            "iiurlwidth": 900,
+            "format": "json",
+        })
+        request = urllib.request.Request(
+            "https://commons.wikimedia.org/w/api.php?" + params,
+            headers={"User-Agent": "resumen-diario/2.0 (https://github.com/Ivangb-626/resumen-diario)"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            pages = payload.get("query", {}).get("pages", {})
+            candidates = sorted(pages.values(), key=lambda page: page.get("index", 999))
+            for page in candidates:
+                info = (page.get("imageinfo") or [{}])[0]
+                width, height = info.get("width", 0), info.get("height", 0)
+                # Check the generated thumbnail, not the original file MIME: Commons
+                # can create a JPEG/PNG preview even when the source is SVG or WebP.
+                image_url = usable_image_url(info.get("thumburl") or "")
+                if not image_url or min(width, height) < 300:
+                    continue
+                metadata = info.get("extmetadata", {})
+                license_name = clean_html(metadata.get("LicenseShortName", {}).get("value", ""))
+                artist = clean_html(metadata.get("Artist", {}).get("value", ""))
+                description_url = usable_image_url(info.get("descriptionurl", ""))
+                credit_parts = [part for part in (artist, license_name) if part]
+                credit = " · ".join(credit_parts)
+                if description_url:
+                    credit = f"{credit} · {description_url}" if credit else description_url
+                return image_url, credit
+        except Exception as exc:
+            print(f"Commons: búsqueda «{query[:55]}» fallida ({type(exc).__name__}: {str(exc)[:120]}).")
     return "", ""
 
+
+def fetch_article_image(article_url: str) -> str:
+    """Fallback: extract the publisher's own article image."""
+    request = urllib.request.Request(
+        article_url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            if "text/html" not in response.headers.get("Content-Type", "").lower():
+                return ""
+            page = response.read(1_500_000).decode("utf-8", errors="replace")
+        parser = ImageMetaParser()
+        parser.feed(page)
+        return usable_image_url(parser.image_url, article_url)
+    except Exception as exc:
+        print(f"Imagen del medio no disponible ({type(exc).__name__}).")
+        return ""
 
 def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
     """Download a small raster image suitable for embedding in an email."""
@@ -501,6 +531,17 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
             except Exception:
                 pass
 
+    # If Commons has no match, try the publisher's own article preview, then RSS.
+    missing = [a for a in articles if not usable_image_url(str(a.get("image_url", "")))]
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(fetch_article_image, str(a.get("url", ""))): a for a in missing}
+        for future in as_completed(futures):
+            article = futures[future]
+            try:
+                article["image_url"] = future.result()
+            except Exception:
+                article["image_url"] = ""
+
     # Download thumbnails in parallel, keeping the total message reasonably small.
     with ThreadPoolExecutor(max_workers=6) as pool:
         futures = {
@@ -521,7 +562,11 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 pass
 
     attached = sum(1 for article in articles if article.get("_image_data"))
-    print(f"Imágenes incrustadas en el correo: {attached}/{len(articles)} noticias.")
+    print(
+        f"Imágenes incrustadas en el correo: {attached}/{len(articles)} noticias. "
+        f"Con URL: {sum(1 for article in articles if article.get('image_url'))}; "
+        f"sin imagen: {sum(1 for article in articles if not article.get('_image_data'))}."
+    )
 
 def fetch_yahoo_quote(symbol: str) -> dict[str, Any] | None:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol, safe='')}"
