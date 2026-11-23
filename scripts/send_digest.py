@@ -607,10 +607,12 @@ def fetch_brave_image(article: dict[str, Any], api_key: str) -> str:
             title = str(result.get("title") or "")
             score = image_text_score(original, title)
             props = result.get("properties") or {}
-            candidate = usable_image_url(str(props.get("url") or ""))
+            # Prefer Brave's normalized 500px proxy thumbnail: it is more likely
+            # to be directly embeddable than the publisher's original WebP asset.
+            thumb = result.get("thumbnail") or {}
+            candidate = usable_image_url(str(thumb.get("src") or ""))
             if not candidate:
-                thumb = result.get("thumbnail") or {}
-                candidate = usable_image_url(str(thumb.get("src") or ""))
+                candidate = usable_image_url(str(props.get("url") or ""))
             width = props.get("width") or 0
             height = props.get("height") or 0
             if candidate and not image_url_is_generic(candidate) and score >= 0.52:
