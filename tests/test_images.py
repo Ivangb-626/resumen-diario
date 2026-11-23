@@ -857,5 +857,42 @@ class ArticleImageTests(unittest.TestCase):
         self.assertEqual(mocked.call_count, 2)
         sleep.assert_called_once_with(2)
 
+    def test_44_rejects_space_station_construction_for_data_centre_story(self):
+        article = {
+            "section": "Ciencia, investigación y tecnología",
+            "headline": "Aragón regula los centros de datos",
+            "original_headline": "Aragon sets rules for data centres",
+            "summary": "New rules cover data centre infrastructure.",
+        }
+        descriptor = (
+            "SSPF under construction at Kennedy Space Center Space Station "
+            "Processing Facility, structural steel"
+        )
+        self.assertTrue(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+        self.assertNotIn(
+            "data center construction facility exterior",
+            digest.fallback_visual_queries(article),
+        )
+
+    def test_45_keeps_server_room_image_for_data_centre_story(self):
+        article = {
+            "section": "Ciencia, investigación y tecnología",
+            "headline": "Aragón regula los centros de datos",
+            "original_headline": "Aragon sets rules for data centres",
+            "summary": "New rules cover data centre infrastructure.",
+        }
+        descriptor = "DHL Netherlands local site computer room server racks"
+        self.assertFalse(
+            digest.image_descriptor_conflicts_with_story(article, descriptor)
+        )
+        self.assertIn(
+            "data center server room rows server racks",
+            digest.fallback_visual_queries(article),
+        )
+
+
+
 if __name__ == "__main__":
     unittest.main()
