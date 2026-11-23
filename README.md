@@ -13,7 +13,7 @@ El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin 
 
 Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia incluye imagen incrustada cuando la fuente publica una miniatura o metadatos Open Graph accesibles, titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
 
-Al final se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible.
+Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible.
 
 ## Cómo funciona
 
@@ -44,7 +44,7 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 
 El proyecto usa `gemini-3.1-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Si no configuras la clave, el correo seguirá enviándose en modo de respaldo con extractos RSS, pero sin selección editorial ni análisis de Gemini. Si la API falla, el correo y los logs distinguirán entre secreto ausente y error de API (por ejemplo, modelo, permisos o cuota), sin revelar la clave.
+Si no configuras la clave o Gemini falla, el correo seguirá enviándose con el seguimiento de mercados y un aviso del error, pero se omitirán las noticias RSS sin traducir para no mostrar contenido editorial en otros idiomas. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
 ### Gmail SMTP
 
