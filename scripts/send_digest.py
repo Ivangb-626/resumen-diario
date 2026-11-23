@@ -1022,19 +1022,32 @@ STORIES:
                 phrase = re.sub(r"\s+", " ", str(value)).strip()[:120]
                 if len(phrase) >= 8 and phrase not in cleaned:
                     cleaned.append(phrase)
-                if len(cleaned) >= 2:
+                if len(cleaned) >= 1:
                     break
-            if cleaned:
-                story = next(
-                    article for article in articles
-                    if str(article.get("id") or article.get("url")) == story_id
+            story = next(
+                article for article in articles
+                if str(article.get("id") or article.get("url")) == story_id
+            )
+            story_text = " ".join((
+                str(story.get("original_headline") or story.get("headline") or ""),
+                str(story.get("summary") or ""),
+                " ".join(fallback_visual_queries(story)),
+            ))
+            # A model-generated phrase must share a meaningful topic with the story
+            # or one of its domain-specific fallbacks; reject free-floating concepts.
+            if cleaned and image_token_overlap(cleaned[0], story_text) < 0.12:
+                print(
+                    f"Consulta Gemini descartada por poca relación textual "
+                    f"({story_id}): {cleaned[0]}"
                 )
-                for visual_fallback in fallback_visual_queries(story):
-                    if visual_fallback not in cleaned:
-                        cleaned.append(visual_fallback)
-                    if len(cleaned) >= 3:
-                        break
-                queries[story_id] = cleaned[:3]
+                cleaned = []
+            base_queries = cleaned or [fallback_image_query(story)]
+            for visual_fallback in fallback_visual_queries(story):
+                if visual_fallback not in base_queries:
+                    base_queries.append(visual_fallback)
+                if len(base_queries) >= 3:
+                    break
+            queries[story_id] = base_queries[:3]
         print(f"Gemini: consultas visuales preparadas para {sum(bool(v) for v in queries.values())}/{len(articles)} noticias.")
         for article in articles:
             story_id = str(article.get("id") or article.get("url"))
@@ -1111,6 +1124,8 @@ def fetch_commons_candidates(
             description = clean_html(str((meta.get("ImageDescription") or {}).get("value") or ""))
             title = str(page.get("title") or "").replace("File:", "").replace("_", " ")
             descriptor = " ".join((title, object_name, description[:1800])).strip()
+            if image_descriptor_conflicts_with_story(article, descriptor):
+                continue
             score = max(
                 image_token_overlap(query, descriptor) for query in search_queries[:3]
             )
@@ -1297,6 +1312,62 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
         print(f"No se pudo descargar imagen ({urllib.parse.urlparse(image_url).netloc}: {type(exc).__name__}).")
         return None
 
+def image_descriptor_conflicts_with_story(
+    article: dict[str, Any], descriptor: str
+) -> bool:
+    """Reject explicit geographic mismatches for locally or nationally specific stories."""
+    story_text = " ".join((
+        str(article.get("original_headline") or article.get("headline") or ""),
+        str(article.get("summary") or ""),
+        str(article.get("section") or ""),
+    )).lower()
+    photo_text = (descriptor or "").lower()
+
+    # Photos explicitly tied to conflict locations must not match unrelated stories
+    # merely because their captions contain words like "elderly people".
+    conflict_zones = (
+        "gaza", "rafah", "palestine", "palestinian", "israel", "west bank",
+        "brunei", "bandar seri begawan", "toronto", "canada",
+    )
+    found_zone = next((zone for zone in conflict_zones if zone in photo_text), "")
+    if not found_zone:
+        return False
+    if found_zone in story_text:
+        return False
+
+    is_pension_or_local_business = any(term in story_text for term in (
+        "pension", "pensionista", "pensionistas", "jubil", "retiree",
+        "pymes", "pyme", "sme", "small business", "emprend",
+        "euskadi", "basque", "gipuzkoa", "donostia",
+    ))
+    is_spain_local_story = (
+        str(article.get("section") or "") == "España y Gipuzkoa"
+        or any(term in story_text for term in (
+            "españa", "español", "spanish", "spain", "euskadi", "basque",
+            "gipuzkoa", "donostia", "lehendakari",
+        ))
+    )
+    if found_zone in {"gaza", "rafah", "palestine", "palestinian", "israel", "west bank"}:
+        return is_spain_local_story and is_pension_or_local_business
+
+    is_swiss_currency_story = any(term in story_text for term in (
+        "swiss franc", "franco suizo", "franc suizo", "chf",
+    ))
+    if found_zone in {"toronto", "canada"}:
+        return is_swiss_currency_story
+
+    is_basque_local_business = (
+        any(term in story_text for term in (
+            "euskadi", "basque", "gipuzkoa", "donostia", "país vasco",
+            "pais vasco", "pyme", "pymes", "sme", "small business",
+        ))
+        and is_spain_local_story
+    )
+    if found_zone in {"brunei", "bandar seri begawan"}:
+        return is_basque_local_business
+    return False
+
+
 def image_candidate_relevance_score(
     article: dict[str, Any], candidate: tuple[str, str, str, str]
 ) -> float:
@@ -1305,6 +1376,8 @@ def image_candidate_relevance_score(
     descriptor = str(article.get("_image_candidate_descriptors", {}).get(image_url, ""))
     if not descriptor:
         descriptor = str(credit or "")
+    if descriptor and image_descriptor_conflicts_with_story(article, descriptor):
+        return 0.0
 
     headline = str(article.get("original_headline") or article.get("headline") or "")
     summary = str(article.get("summary") or "")
