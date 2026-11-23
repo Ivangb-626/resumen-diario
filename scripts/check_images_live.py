@@ -34,11 +34,13 @@ def main() -> int:
             f"{article.get('image_source', 'SIN IMAGEN')}"
         )
 
-    # A live source smoke test must find at least one genuine article-linked image.
-    # The full newsletter run reports and attempts all stories individually.
-    if not attached:
+    # Require a meaningful baseline, not just one lucky image. At least 75% of
+    # the eight current stories must contain a real, downloaded, email-safe photo.
+    required = max(1, (len(articles) * 3 + 3) // 4)
+    if len(attached) < required:
         raise RuntimeError(
-            "Ninguna fuente devolvió una imagen descargable para las noticias de prueba."
+            f"Cobertura insuficiente: {len(attached)}/{len(articles)}; "
+            f"se exigen al menos {required} fotografías descargables."
         )
     return 0
 
