@@ -288,14 +288,22 @@ educación, medioambiente, sociedad y hallazgos interesantes.
 tecnología; especial interés temático en neurociencia, cerebro, epilepsia, EEG,
 medicina, biología, genética, física, espacio e IA aplicada a ciencia.
 
+IDIOMA OBLIGATORIO:
+- Todo el contenido editorial debe estar redactado en castellano natural, claro y
+  correcto, aunque el candidato original esté en inglés, alemán u otro idioma.
+- Traduce al castellano todos los titulares. No dejes titulares en el idioma original.
+- Escribe también en castellano los resúmenes y el apartado "why_it_matters".
+- Conserva nombres propios, nombres oficiales de organizaciones, marcas y medios.
+- No traduzcas el nombre propio de la fuente.
+
 Para cada noticia elegida devuelve:
 - id: ID exacto de un candidato.
 - section: una de las cuatro secciones anteriores.
-- headline: titular fiel al candidato, sin exagerar.
-- summary: resumen factual en español de 3-5 frases breves.
-- why_it_matters: por qué importa y consecuencias plausibles, distinguiendo hechos
+- headline: titular traducido al castellano, fiel al candidato y sin exagerar.
+- summary: resumen factual en castellano de 3-5 frases breves.
+- why_it_matters: por qué importa y consecuencias plausibles, en castellano, distinguiendo hechos
   de interpretación.
-- source_name: nombre de la fuente del candidato.
+- source_name: nombre de la fuente del candidato (nombre oficial).
 - url: URL exacta del candidato, sin modificarla.
 - published: fecha ISO del candidato.
 
@@ -509,33 +517,40 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
 
     msg = EmailMessage()
     msg["Subject"] = f"Tu resumen diario — {now.strftime('%d/%m/%Y')}"
-    plain = [f"TU RESUMEN DIARIO\n{spanish_date(now)}\n"]
+    plain = [f"TU RESUMEN DIARIO\\n{spanish_date(now)}\\n"]
+    plain.append("SEGUIMIENTO DE MERCADOS")
+    for market in markets:
+        sign = "+" if market["change_pct"] >= 0 else ""
+        plain.append(f"{market['name']}: {fmt_number(market['price'], market['currency'])} ({sign}{market['change_pct']:.2f}%)")
+    plain.append("Datos de mercado indicativos. Las variaciones comparan los dos últimos cierres disponibles.")
     for section, _ in SECTIONS:
-        for article in grouped[section]:
+        section_articles = grouped[section]
+        if not section_articles:
+            continue
+        plain.append(f"\\n{section.upper()} — {len(section_articles)} noticias")
+        for article in section_articles:
             plain.extend([
-                f"\n{article.get('headline', 'Noticia')}\n{section}",
+                f"\\n{article.get('headline', 'Noticia')}",
                 article.get("summary", ""),
                 f"Por qué importa: {article.get('why_it_matters', '')}",
                 f"Fuente: {article.get('source_name', '')} — {article.get('url', '')}",
             ])
             if article.get("image_url"):
                 plain.append(f"Imagen: {article['image_url']}")
-    plain.append("\nSEGUIMIENTO DE MERCADOS")
-    for market in markets:
-        sign = "+" if market["change_pct"] >= 0 else ""
-        plain.append(f"{market['name']}: {fmt_number(market['price'], market['currency'])} ({sign}{market['change_pct']:.2f}%)")
-    plain.append("\nDatos de mercado indicativos. Las variaciones comparan los dos últimos cierres disponibles.")
     if not ai_used:
         if not os.environ.get("GEMINI_API_KEY", "").strip():
-            plain.append("\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
+            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
         else:
-            plain.append(f"\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
+            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
     msg.set_content("\n".join(plain))
 
     cards = []
     for section, _ in SECTIONS:
+        section_articles = grouped[section]
+        if not section_articles:
+            continue
         entries = []
-        for article in grouped[section]:
+        for article in section_articles:
             published = parse_date(article.get("published", "")) or now.astimezone(timezone.utc)
             image_html = ""
             if article.get("_image_cid"):
@@ -562,7 +577,12 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
               <p style="font-size:12px;color:#64748b;margin:0">{html.escape(article.get('source_name', ''))} · {published.astimezone(BERLIN).strftime('%d/%m/%Y %H:%M')} · <a href="{html.escape(article.get('url', ''), quote=True)}">Fuente</a></p>
             </article>""")
         if entries:
-            cards.append(f"<h2 style='font-size:20px;margin:26px 0 4px'>{html.escape(section)}</h2>{''.join(entries)}")
+            count = len(section_articles)
+            cards.append(
+                f"<h2 style='font-size:20px;margin:26px 0 4px'>{html.escape(section)} "
+                f"<span style='font-size:14px;font-weight:normal;color:#64748b'>— {count} noticias</span>"
+                f"</h2>{''.join(entries)}"
+            )
 
     market_rows = []
     for market in markets:
@@ -601,8 +621,8 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
       <p style="font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#64748b;margin:0 0 8px">Briefing personal</p>
       <h1 style="font-size:27px;margin:0 0 6px">Tu resumen diario</h1>
       <p style="font-size:14px;color:#64748b;margin:0 0 18px">{html.escape(spanish_date(now))} · Novedades de las últimas 24 horas</p>
-      {note}{''.join(cards) if cards else '<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>'}
-      {market_html}
+      {note}{market_html}
+      {''.join(cards) if cards else '<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>'}
       <p style="font-size:11px;line-height:1.5;color:#64748b;margin:24px 0 0">Las noticias se seleccionan a partir de feeds RSS. Los datos de mercado proceden de Yahoo Finance y pueden tener retraso. Verifica los datos antes de tomar decisiones de inversión.</p>
     </main></body></html>"""
     msg.add_alternative(html_body, subtype="html")
