@@ -330,5 +330,26 @@ class ArticleImageTests(unittest.TestCase):
         self.assertNotIn("against", query.split())
 
 
+    def test_22_fallback_visual_query_targets_visible_subject(self):
+        self.assertIn(
+            "server room",
+            digest.fallback_visual_query({
+                "headline": "El decreto que regula los centros de datos en Aragón"
+            }),
+        )
+        self.assertIn(
+            "procession",
+            digest.fallback_visual_query({
+                "headline": "El delegado de Hermandades de Málaga rechaza la utilización partidista"
+            }),
+        )
+        self.assertIn(
+            "small business",
+            digest.fallback_visual_query({
+                "headline": "Innovación para reforzar las pymes del País Vasco"
+            }),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
