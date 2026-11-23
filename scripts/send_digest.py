@@ -528,7 +528,7 @@ def fetch_article_image(article: dict[str, Any]) -> tuple[str, str]:
 
 def fetch_gdelt_images(articles: list[dict[str, Any]]) -> dict[str, str]:
     """Find social images for the same stories in GDELT's global news index."""
-    missing = [a for a in articles if not a.get("image_url")]
+    missing = list(articles)
     if not missing:
         return {}
     # One batched query avoids hammering GDELT's rate-limited public API.
@@ -664,7 +664,7 @@ def download_first_available(candidates: list[tuple[str, str]]) -> tuple[bytes, 
 
 
 def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Collect several article-linked sources and try them until one embeds successfully."""
+    """Collect article-linked images and exhaust reliable sources before leaving a story without one."""
     articles = editorial.get("articles", [])
     candidates: dict[int, list[tuple[str, str]]] = {
         id(article): [] for article in articles
@@ -689,32 +689,14 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
         if rss_candidate and not image_url_is_generic(rss_candidate):
             candidates[id(article)].append((rss_candidate, "rss"))
 
-    # Tier 3: GDELT socialimage matched against the original headline.
+    # Tier 3: GDELT socialimage, matched against each original headline.
     gdelt_map = fetch_gdelt_images(articles)
     for article in articles:
         candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
         if candidate:
             candidates[id(article)].append((candidate, "gdelt"))
 
-    # Tier 4: optional Brave Image Search; enabled with BRAVE_SEARCH_API_KEY.
-    brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
-    if brave_key:
-        missing = [a for a in articles if not candidates[id(a)]]
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
-            for future in as_completed(futures):
-                article = futures[future]
-                try:
-                    candidate = future.result()
-                    if candidate:
-                        candidates[id(article)].append((candidate, "brave"))
-                except Exception:
-                    pass
-    else:
-        print("Brave Image Search omitido: falta el secreto opcional BRAVE_SEARCH_API_KEY.")
-
-    # Try every candidate in order. A broken publisher URL must not prevent trying
-    # the RSS or GDELT alternative for the same story.
+    # Download all article-linked candidates before trying a general image index.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
             pool.submit(download_first_available, candidates[id(article)]): (index, article)
@@ -736,6 +718,33 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
             except Exception as exc:
                 article["image_url"] = ""
                 print(f"No se pudo incrustar imagen para una noticia ({type(exc).__name__}).")
+
+    # Tier 4: optional Brave Image Search only for stories still lacking a working
+    # image. Results are accepted only with a strong headline/title match.
+    brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+    if brave_key:
+        missing = [a for a in articles if not a.get("_image_data")]
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    candidate = future.result()
+                    if not candidate:
+                        continue
+                    result = download_inline_image(candidate)
+                    if result:
+                        data, subtype = result
+                        index = articles.index(article) + 1
+                        article["image_url"] = candidate
+                        article["image_source"] = "brave"
+                        article["_image_data"] = data
+                        article["_image_subtype"] = subtype
+                        article["_image_cid"] = f"news-image-{index}@resumen-diario"
+                except Exception as exc:
+                    print(f"Brave no pudo aportar imagen para una noticia ({type(exc).__name__}).")
+    else:
+        print("Brave Image Search omitido: falta el secreto opcional BRAVE_SEARCH_API_KEY.")
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     source_counts: dict[str, int] = {}
