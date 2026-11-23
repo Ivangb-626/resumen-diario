@@ -598,7 +598,9 @@ def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
             if not image_url or image_url_is_generic(image_url):
                 continue
             host = urllib.parse.urlparse(image_url).netloc.lower()
-            if host.endswith("google.com") or host.endswith("googleusercontent.com"):
+            # Google News hosts many of its genuine story thumbnails on lh3.googleusercontent.com.
+            # Keep those image URLs; reject only Google HTML/page URLs, not the image CDN.
+            if host.endswith("google.com"):
                 continue
             if image_url not in unique:
                 unique.append(image_url)
