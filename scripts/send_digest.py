@@ -866,9 +866,9 @@ def fallback_visual_queries(article: dict[str, Any]) -> list[str]:
         ]
     elif any(term in text for term in ("pyme", "pymes", "small business", "small and medium", "emprend")):
         queries = [
-            "Basque Country SME entrepreneurs workshop Euskadi",
+            "Basque Country small business owners workshop Euskadi",
             "Euskadi small business owners innovation centre",
-            "Bilbao Basque SME manufacturing business",
+            "Bilbao Basque small business manufacturing workshop",
         ]
     elif any(term in text for term in ("adamuz", "accidente ferrovi", "accident train", "railway accident", "ferrovi", "tren", "railway safety")):
         queries = [
