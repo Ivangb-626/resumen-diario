@@ -813,7 +813,9 @@ def generate_commons_queries(
 ) -> dict[str, list[str]]:
     """Use Gemini to turn long headlines into precise, visual Commons search phrases."""
     queries = {
-        str(article.get("id") or article.get("url")): [fallback_image_query(article)]
+        str(article.get("id") or article.get("url")): [
+            fallback_image_query(article), fallback_visual_query(article)
+        ]
         for article in articles
     }
     if not api_key or not articles:
@@ -860,7 +862,13 @@ STORIES:
                 if len(cleaned) >= 2:
                     break
             if cleaned:
-                queries[story_id] = cleaned
+                visual_fallback = fallback_visual_query(next(
+                    article for article in articles
+                    if str(article.get("id") or article.get("url")) == story_id
+                ))
+                if visual_fallback not in cleaned:
+                    cleaned.append(visual_fallback)
+                queries[story_id] = cleaned[:3]
         print(f"Gemini: consultas visuales preparadas para {sum(bool(v) for v in queries.values())}/{len(articles)} noticias.")
         for article in articles:
             story_id = str(article.get("id") or article.get("url"))
@@ -1285,6 +1293,34 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
         embed_candidates(missing, candidates)
         print(
             f"Tras Wikimedia Commons ilustrativo: "
+            f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
+        )
+
+    # Absolute last fallback: the user prefers an actual, non-empty photo over
+    # an empty image slot. Use a genuine Commons cityscape photo and label it as
+    # a general illustration rather than implying it depicts the specific story.
+    missing = [article for article in articles if not article.get("_image_data")]
+    if missing:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(fetch_commons_candidates, article, ["city skyline"]): article
+                for article in missing
+            }
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    for image_url, _source, landing, credit in future.result():
+                        candidates[id(article)].append((
+                            image_url,
+                            "commons-generic-illustrative",
+                            landing,
+                            (credit + " · imagen ilustrativa general").strip(" ·"),
+                        ))
+                except Exception as exc:
+                    print(f"Commons genérico no disponible ({type(exc).__name__}).")
+        embed_candidates(missing, candidates)
+        print(
+            f"Tras Wikimedia Commons genérico: "
             f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
         )
 
