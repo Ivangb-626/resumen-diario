@@ -1524,6 +1524,9 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
     # Theme-level images are only allowed after story-specific sources are exhausted.
     missing = [article for article in articles if not article.get("_image_data")]
     if missing:
+        # Candidates rejected in the story-specific passes must not be reconsidered here.
+        for article in missing:
+            candidates[id(article)] = []
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
                 pool.submit(
