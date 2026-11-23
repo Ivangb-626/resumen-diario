@@ -1035,7 +1035,7 @@ STORIES:
             ))
             # A model-generated phrase must share a meaningful topic with the story
             # or one of its domain-specific fallbacks; reject free-floating concepts.
-            if cleaned and image_token_overlap(cleaned[0], story_text) < 0.12:
+            if cleaned and image_token_overlap(cleaned[0], story_text) < 0.30:
                 print(
                     f"Consulta Gemini descartada por poca relación textual "
                     f"({story_id}): {cleaned[0]}"
