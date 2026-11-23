@@ -1325,6 +1325,15 @@ def image_descriptor_conflicts_with_story(
     )).lower()
     photo_text = (descriptor or "").lower()
 
+    is_data_centre_story = any(term in story_text for term in (
+        "data center", "data centre", "centro de datos", "centros de datos",
+    ))
+    if is_data_centre_story and any(term in photo_text for term in (
+        "space station", "space processing facility", "kennedy space center",
+        "nasa", "launch pad", "space shuttle",
+    )):
+        return True
+
     # Photos explicitly tied to conflict locations must not match unrelated stories
     # merely because their captions contain words like "elderly people".
     conflict_zones = (
@@ -1351,15 +1360,6 @@ def image_descriptor_conflicts_with_story(
     )
     if found_zone in {"gaza", "rafah", "palestine", "palestinian", "israel", "west bank"}:
         return is_spain_local_story and is_pension_or_local_business
-
-    is_data_centre_story = any(term in story_text for term in (
-        "data center", "data centre", "centro de datos", "centros de datos",
-    ))
-    if is_data_centre_story and any(term in photo_text for term in (
-        "space station", "space processing facility", "kennedy space center",
-        "nasa", "launch pad", "space shuttle",
-    )):
-        return True
 
     is_swiss_currency_story = any(term in story_text for term in (
         "swiss franc", "franco suizo", "franc suizo", "chf",
