@@ -351,5 +351,169 @@ class ArticleImageTests(unittest.TestCase):
         )
 
 
+    def test_23_image_relevance_score_prefers_matching_named_subject(self):
+        article = {
+            "headline": "El Banco Central Europeo inaugura una nueva sede en Fráncfort",
+            "original_headline": "European Central Bank opens new Frankfurt headquarters",
+            "summary": "The European Central Bank has opened its new Frankfurt headquarters.",
+            "_image_search_queries": ["European Central Bank Frankfurt headquarters"],
+            "_image_candidate_descriptors": {
+                "https://img.example/match.jpg": (
+                    "European Central Bank new headquarters Frankfurt building"
+                ),
+                "https://img.example/wrong.jpg": "Football stadium Madrid match",
+            },
+        }
+        matching = (
+            "https://img.example/match.jpg", "commons", "", ""
+        )
+        unrelated = (
+            "https://img.example/wrong.jpg", "commons", "", ""
+        )
+        self.assertGreater(
+            digest.image_candidate_relevance_score(article, matching),
+            digest.image_candidate_relevance_score(article, unrelated),
+        )
+
+    def test_24_gemini_visual_rank_sends_inline_images_and_parses_result(self):
+        digest._GEMINI_VISION_DISABLED = False
+        answer = json.dumps({
+            "candidates": [{
+                "content": {"parts": [{
+                    "text": json.dumps({
+                        "images": [{
+                            "index": 1, "relevance": 94,
+                            "relation": "direct", "reason": "Sede identificable",
+                        }]
+                    })
+                }]}
+            }]
+        }).encode()
+        downloaded = [(
+            ("https://img.example/ecb.jpg", "commons", "", ""),
+            b"\xff\xd8fake-jpeg",
+            0.82,
+        )]
+        with patch.object(
+            digest.urllib.request, "urlopen",
+            return_value=FakeResponse(answer, "application/json"),
+        ) as mocked:
+            result = digest.gemini_visual_rank({
+                "id": "N024",
+                "headline": "El BCE inaugura su nueva sede en Fráncfort",
+                "summary": "El banco central presenta sus nuevas instalaciones.",
+            }, downloaded, "test-key")
+
+        self.assertEqual(result[1]["relation"], "direct")
+        self.assertEqual(result[1]["relevance"], 94)
+        request = mocked.call_args.args[0]
+        payload = json.loads(request.data.decode())
+        self.assertTrue(any(
+            "inline_data" in part
+            for part in payload["contents"][0]["parts"]
+        ))
+
+    def test_25_visual_review_selects_relevant_candidate_over_first_download(self):
+        digest._GEMINI_VISION_DISABLED = False
+        article = {
+            "id": "N025",
+            "headline": "El Banco Central Europeo inaugura su nueva sede en Fráncfort",
+            "original_headline": "European Central Bank opens its new Frankfurt headquarters",
+            "summary": "The ECB opened its new headquarters in Frankfurt.",
+            "_image_search_queries": ["European Central Bank Frankfurt headquarters"],
+            "_image_candidate_descriptors": {
+                "https://img.example/metadata-match.jpg": (
+                    "European Central Bank building Frankfurt"
+                ),
+                "https://img.example/visually-correct.jpg": (
+                    "Frankfurt skyline and modern glass tower"
+                ),
+            },
+        }
+        candidates = [
+            ("https://img.example/metadata-match.jpg", "commons", "", ""),
+            ("https://img.example/visually-correct.jpg", "publisher", "", ""),
+        ]
+        with patch.object(
+            digest, "download_inline_image",
+            side_effect=[(b"first-photo", "jpeg"), (b"second-photo", "jpeg")],
+        ), patch.object(
+            digest, "gemini_visual_rank",
+            return_value={
+                1: {"relation": "unrelated", "relevance": 12, "reason": "No coincide"},
+                2: {"relation": "direct", "relevance": 96, "reason": "Sede visible"},
+            },
+        ):
+            result = digest.download_ranked_candidates(article, candidates, "test-key")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result[2], "https://img.example/visually-correct.jpg")
+        self.assertEqual(article["image_match_type"], "direct")
+
+    def test_26_prepare_images_searches_publisher_even_when_commons_has_results(self):
+        article = {
+            "id": "N026",
+            "url": "https://publisher.example/story",
+            "headline": "Una noticia concreta sobre una nueva instalación",
+            "original_headline": "A specific story about a new facility",
+            "summary": "The facility opened this week.",
+            "section": "Ciencia, investigación y tecnología",
+            "rss_image_url": "",
+        }
+
+        def mark_embedded(articles, _candidates, _api_key=""):
+            for item in articles:
+                item["_image_data"] = b"validated-photo"
+                item["_image_subtype"] = "jpeg"
+                item["_image_cid"] = "test-image"
+                item["image_source"] = "test"
+
+        with patch.object(
+            digest, "generate_commons_queries",
+            return_value={"N026": ["new facility exact subject", "facility exterior"]},
+        ), patch.object(
+            digest, "fetch_commons_candidates",
+            return_value=[("https://commons.example/facility.jpg", "commons", "", "")],
+        ) as commons_search, patch.object(
+            digest, "fetch_article_images",
+            return_value=(["https://publisher.example/lead.jpg"], "https://publisher.example/story"),
+        ) as publisher_search, patch.object(
+            digest, "embed_candidates", side_effect=mark_embedded,
+        ):
+            digest.prepare_article_images({"articles": [article]}, api_key="")
+
+        commons_search.assert_called_once()
+        publisher_search.assert_called_once()
+        self.assertEqual(article["image_source"], "test")
+
+    def test_27_gemini_illustrative_classification_is_not_passed_as_specific(self):
+        digest._GEMINI_VISION_DISABLED = False
+        article = {
+            "id": "N027",
+            "headline": "La Comisión Europea anuncia una sanción a una empresa concreta",
+            "original_headline": "European Commission sanctions Acme Corporation",
+            "summary": "The action concerns Acme Corporation.",
+            "_image_search_queries": ["European Commission Acme Corporation"],
+            "_image_candidate_descriptors": {
+                "https://img.example/eu-building.jpg": "European Commission headquarters Brussels",
+            },
+        }
+        candidate = ("https://img.example/eu-building.jpg", "commons", "", "")
+        with patch.object(
+            digest, "download_inline_image",
+            return_value=(b"photo", "jpeg"),
+        ), patch.object(
+            digest, "gemini_visual_rank",
+            return_value={
+                1: {"relation": "illustrative", "relevance": 88, "reason": "Solo edificio institucional"},
+            },
+        ):
+            result = digest.download_ranked_candidates(article, [candidate], "test-key")
+
+        self.assertIsNone(result)
+
+
+
+
 if __name__ == "__main__":
     unittest.main()
