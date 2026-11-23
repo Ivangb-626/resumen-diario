@@ -11,7 +11,7 @@ El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin 
 3. **Cultura, sociedad y descubrimientos**: historia, arqueología, patrimonio, libros, educación, medioambiente y descubrimientos.
 4. **Ciencia, investigación y tecnología**: más peso para ciencia e investigación que para tecnología; neurociencia, cerebro, epilepsia, EEG, medicina, biología, genética, física, espacio e IA científica.
 
-Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia incluye imagen incrustada cuando la fuente publica una miniatura o metadatos Open Graph accesibles, titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
+Todo el contenido editorial de las noticias (titulares, resúmenes y análisis) se redacta en castellano, aunque la fuente original publique en otro idioma. Las noticias se agrupan bajo cada sección con su número de noticias. El seguimiento de mercados aparece al principio del correo. Cada noticia intenta incluir una fotografía incrustada. El sistema prueba, por orden, los metadatos de imagen del artículo original, las miniaturas del RSS, imágenes sociales de GDELT asociadas a titulares coincidentes y, si se configura una clave, resultados de Brave Image Search filtrados por similitud del titular. No se aceptan resultados genéricos por tema. También se intenta la siguiente fuente si una imagen no se puede descargar. No se incluyen ofertas de empleo ni prácticas.
 
 Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible (sin Ibex 35). A continuación aparecen las cinco mayores subidas y las cinco mayores bajadas del día dentro de una cesta predefinida de grandes compañías internacionales conocidas, como NVIDIA, Apple, Microsoft, Amazon, Alphabet, Meta, Tesla, JPMorgan, ASML, SAP y LVMH. Así se evita que valores pequeños o poco conocidos dominen la lista por movimientos poco representativos.
 
@@ -21,7 +21,7 @@ Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, E
 - El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
 - Gemini clasifica los candidatos por relevancia y redacta en castellano los titulares, resúmenes y análisis usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
 - Los datos de mercado se consultan desde Yahoo Finance.
-- El correo se envía por Gmail SMTP e incrusta las imágenes de las noticias como recursos MIME relacionados cuando se pueden obtener. Si una fuente no ofrece una imagen accesible, esa noticia puede aparecer sin imagen.
+- Las imágenes se obtienen en varias capas: página del editor (JSON-LD/Open Graph), metadatos multimedia del RSS, GDELT DOC 2.0 (coincidencia de titular) y Brave Image Search opcional. Se descarga y se incrusta la primera imagen válida; si falla una URL se prueba la siguiente fuente. GDELT no requiere clave. Brave requiere `BRAVE_SEARCH_API_KEY`.
 
 **Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
 
@@ -35,6 +35,15 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 | `GMAIL_APP_PASSWORD` | Sí | Contraseña de aplicación de Gmail |
 | `GMAIL_RECIPIENT` | No | Destinatario; si falta, se usa GMAIL_ADDRESS |
 | `GEMINI_API_KEY` | Recomendado | Clave de Gemini para selección y análisis editorial |
+| `BRAVE_SEARCH_API_KEY` | Opcional | Búsqueda adicional de imágenes cuando fallan las fuentes vinculadas al artículo |
+
+### Obtener BRAVE_SEARCH_API_KEY (opcional)
+
+1. Crea una suscripción de Brave Search API en [Brave Search API](https://brave.com/search/api/).
+2. Genera una clave para la API de imágenes.
+3. Añádela en GitHub Secrets con el nombre exacto `BRAVE_SEARCH_API_KEY`.
+
+Si no se configura, el sistema sigue utilizando las imágenes del artículo, RSS y GDELT. Brave solo se consulta para noticias que continúan sin una imagen descargable. La búsqueda externa puede tener condiciones de uso y derechos de imagen propios; la similitud del titular se usa como filtro adicional, no como garantía de licencia.
 
 ### Obtener GEMINI_API_KEY
 
