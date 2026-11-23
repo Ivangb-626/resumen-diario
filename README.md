@@ -73,3 +73,16 @@ Los estados admitidos son:
 Para cerrar una tarea, cambia su estado a `completed`. Para añadir una tarea, agrega un nuevo objeto con un `id` único, `title`, `category`, `status`, `priority` y `next_action`.
 
 **Nota:** esta lista es una carga inicial de lo que aparece pendiente en el contexto guardado. No existe sincronización automática entre la memoria de ChatGPT y GitHub; cuando me comuniques nuevos pendientes o tareas terminadas, actualizaré el JSON del repositorio.
+
+
+## Sincronización con ChatGPT
+
+La memoria interna de ChatGPT y GitHub son sistemas separados: GitHub no puede leer ni observar automáticamente los cambios que el sistema de Memoria de ChatGPT guarde en segundo plano.
+
+Para mantener la lista sincronizada durante nuestras conversaciones, se seguirá este protocolo:
+- Cuando el usuario pida guardar algo como pendiente, ChatGPT añadirá o actualizará el objeto correspondiente en `data/pending_tasks.json` mediante la integración de GitHub.
+- Cuando el usuario indique que una tarea está terminada, ChatGPT cambiará su estado a `completed`.
+- Si cambia la fecha, prioridad o siguiente acción, ChatGPT actualizará el mismo elemento en vez de crear un duplicado.
+- El correo diario leerá siempre la última versión de ese archivo en la rama `main`.
+
+No hace falta que el usuario edite GitHub manualmente. La sincronización se realiza en el mismo turno en que se pide registrar o cambiar una tarea en ChatGPT. No se pueden replicar cambios de Memoria que ocurran silenciosamente fuera de una conversación.
