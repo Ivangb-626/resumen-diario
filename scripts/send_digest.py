@@ -345,7 +345,7 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
     return {"articles": [{
         "id": s.id, "section": s.section, "headline": s.title,
         "summary": s.excerpt or "El feed no proporciona un extracto suficiente.",
-        "why_it_matters": "No se ha generado análisis editorial: configura GEMINI_API_KEY para activar esta función.",
+        "why_it_matters": "No se ha generado análisis editorial porque Gemini no ha podido procesar las noticias en este envío.",
         "source_name": s.source, "url": s.link, "published": s.published.isoformat(),
         "image_url": s.image_url,
     } for s in selected[:20]]}
@@ -527,9 +527,9 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
     plain.append("\nDatos de mercado indicativos. Las variaciones comparan los dos últimos cierres disponibles.")
     if not ai_used:
         if not os.environ.get("GEMINI_API_KEY", "").strip():
-            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
+            plain.append("\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
         else:
-            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
+            plain.append(f"\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
     msg.set_content("\n".join(plain))
 
     cards = []
