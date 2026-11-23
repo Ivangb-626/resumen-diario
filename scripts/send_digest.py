@@ -1012,7 +1012,7 @@ def download_inline_image(image_url: str, referer: str = "") -> tuple[bytes, str
         with urllib.request.urlopen(request, timeout=20) as response:
             content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
             data = response.read(8_000_001)
-        if not data or len(data) > 8_000_000 or len(data) < 5_000:
+        if not data or len(data) > 8_000_000 or len(data) < 1_500:
             print(f"Imagen rechazada por tamaño ({len(data)} bytes): {urllib.parse.urlparse(image_url).netloc}.")
             return None
 
