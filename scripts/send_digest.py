@@ -206,6 +206,23 @@ def usable_image_url(value: str, base_url: str = "") -> str:
     return absolute
 
 
+def google_image_url_variants(value: str) -> list[str]:
+    """Try larger variants of Googleusercontent thumbnails before the original URL."""
+    parsed = urllib.parse.urlparse(value)
+    host = (parsed.hostname or "").lower()
+    if not (host == "googleusercontent.com" or host.endswith(".googleusercontent.com")):
+        return [value]
+    variants: list[str] = []
+    # Google image CDN sizing suffixes commonly look like =w300-h300 or =s300.
+    sized = re.search(r"=(?:w\d+(?:-h\d+)?|s\d+)(?:-[a-z0-9-]+)?$", parsed.path, re.I)
+    if sized:
+        path_prefix = parsed.path[:sized.start()]
+        for suffix in ("=w1200-h800", "=s1600"):
+            variants.append(urllib.parse.urlunparse(parsed._replace(path=path_prefix + suffix)))
+    variants.append(value)
+    return list(dict.fromkeys(variants))
+
+
 def rss_image(item: ET.Element, raw_description: str) -> str:
     # Prefer explicit media/enclosure metadata supplied by the RSS feed.
     for node in item.iter():
@@ -636,12 +653,15 @@ def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
             if not image_url or image_url_is_generic(image_url):
                 continue
             host = urllib.parse.urlparse(image_url).netloc.lower()
-            # Google News hosts many of its genuine story thumbnails on lh3.googleusercontent.com.
-            # Keep those image URLs; reject only Google HTML/page URLs, not the image CDN.
-            if host.endswith("google.com"):
+            # Google News story thumbnails may expose a small default variant. Try
+            # larger CDN sizes first; still preserve the original as a last option.
+            if host.endswith("google.com") and not host.endswith("googleusercontent.com"):
                 continue
-            if image_url not in unique:
-                unique.append(image_url)
+            for expanded in google_image_url_variants(image_url):
+                if expanded not in unique:
+                    unique.append(expanded)
+                if len(unique) >= 12:
+                    break
             if len(unique) >= 12:
                 break
         descriptors = article.setdefault("_image_candidate_descriptors", {})
@@ -791,38 +811,131 @@ def fallback_image_query(article: dict[str, Any]) -> str:
     return " ".join(selected)
 
 
-def fallback_visual_query(article: dict[str, Any]) -> str:
-    """Return a transparent, section-specific illustrative-photo query as last resort."""
+def fallback_visual_queries(article: dict[str, Any]) -> list[str]:
+    """Build several concrete, per-story photo searches without inventing an event."""
     text = " ".join((
         str(article.get("original_headline") or article.get("headline") or ""),
         str(article.get("summary") or ""),
     )).lower()
+    queries: list[str] = []
+
     if any(term in text for term in ("data center", "data centre", "centro de datos", "centros de datos")):
-        return "data center server room server racks infrastructure"
-    if any(term in text for term in ("hermandad", "cofrad", "procesión", "procession", "holy week", "semana santa")):
-        return "Malaga Holy Week religious brotherhood procession"
-    if any(term in text for term in ("pyme", "pymes", "small business", "small and medium", "emprend")):
-        return "small business office entrepreneurs innovation"
-    if any(term in text for term in ("ferrovi", "tren", "railway", "rail", "estación")):
-        return "railway station train tracks Spain"
-    if any(term in text for term in ("pesquer", "fish", "flota", "fishing")):
-        return "fishing boats fishing fleet harbor Spain"
-    if any(term in text for term in ("elección", "elecciones", "parlamento", "congreso", "government", "gobierno")):
-        return "Spanish parliament Congress government building"
-    if any(term in text for term in ("banco central", "central bank", "mercados", "markets", "bolsa", "stocks")):
-        return "stock exchange trading floor financial markets"
-    if any(term in text for term in ("laboratorio", "neurociencia", "cerebro", "research", "investigación", "scientific")):
-        return "scientific research laboratory scientists"
-    section = str(article.get("section") or "")
-    if section == "España y Gipuzkoa":
-        return "Basque Country Donostia San Sebastian cityscape Spain"
-    if section == "Economía y geopolítica":
-        return "international business financial district container port"
-    if section == "Cultura, sociedad y descubrimientos":
-        return "museum cultural heritage exhibition library"
-    if section == "Ciencia, investigación y tecnología":
-        return "scientific laboratory research equipment"
-    return "city public buildings people daily life"
+        queries = [
+            "data center server room server racks",
+            "data centre cooling infrastructure servers",
+            "data center construction facility exterior",
+        ]
+    elif any(term in text for term in ("hermandad", "cofrad", "procesión", "procession", "holy week", "semana santa")):
+        queries = [
+            "Malaga Holy Week procession nazarenos",
+            "Semana Santa religious brotherhood procession Spain",
+            "cofradia Malaga pasos procession street",
+        ]
+    elif any(term in text for term in ("pyme", "pymes", "small business", "small and medium", "emprend")):
+        queries = [
+            "small business owners workshop Spain",
+            "small entrepreneurs local business office",
+            "Basque Country small manufacturing company workshop",
+        ]
+    elif any(term in text for term in ("adamuz", "accidente ferrovi", "accident train", "railway accident", "ferrovi", "tren", "railway safety")):
+        queries = [
+            "Adamuz Spain railway accident train tracks",
+            "railway safety train accident investigation Spain",
+            "Spanish railway tracks high speed train",
+        ]
+    elif any(term in text for term in ("pesquer", "fish", "flota", "fishing")):
+        queries = [
+            "Spanish fishing fleet boats harbor",
+            "fishing boats port fish market Spain",
+            "fishermen fishing vessel deck Spain",
+        ]
+    elif any(term in text for term in ("pension", "jubil", "retiree", "retirement", "pensionista", "pensionistas")):
+        queries = [
+            "pensioners elderly retirement Spain",
+            "elderly pensioners demonstration Spain",
+            "Spanish social security pension office",
+        ]
+    elif any(term in text for term in ("franc suizo", "swiss franc", "franco suizo", "currency exchange", "divisa", "divisas", "exchange rate")):
+        queries = [
+            "Swiss franc banknotes currency exchange",
+            "Swiss National Bank headquarters Zurich",
+            "Swiss franc currency notes coins",
+        ]
+    elif any(term in text for term in ("sindicato", "sindicatos", "union", "trade union", "workers", "votar", "vote", "elección", "elecciones", "ballot")):
+        queries = [
+            "Spanish trade union workers demonstration",
+            "Spain election ballot voting polling station",
+            "Spanish trade unions CCOO UGT protest",
+        ]
+    elif any(term in text for term in ("pradales", "lehendakari", "euskadi", "gipuzkoa", "país vasco", "pais vasco", "basque")):
+        queries = [
+            "Basque Government Lehendakaritza Vitoria Gasteiz",
+            "Basque Country industrial factories manufacturing Euskadi",
+            "Basque Parliament Vitoria Gasteiz exterior",
+        ]
+    elif any(term in text for term in ("banco central", "central bank", "mercados", "markets", "bolsa", "stocks", "equity rout")):
+        queries = [
+            "European stock exchange trading floor financial markets",
+            "central bank headquarters monetary policy",
+            "financial district stock market traders",
+        ]
+    elif any(term in text for term in ("parlamento", "congreso", "government", "gobierno", "comisión europea", "european commission")):
+        queries = [
+            "Spanish Congress of Deputies hemicycle Madrid",
+            "European Commission Berlaymont building Brussels",
+            "Spanish government Moncloa palace Madrid",
+        ]
+    elif any(term in text for term in ("laboratorio", "neurociencia", "cerebro", "research", "investigación", "scientific", "ciencia")):
+        queries = [
+            "scientific research laboratory researchers",
+            "neuroscience brain research laboratory EEG",
+            "scientists laboratory microscopy experiment",
+        ]
+    else:
+        section = str(article.get("section") or "")
+        if section == "España y Gipuzkoa":
+            queries = [
+                "Basque Parliament Vitoria Gasteiz",
+                "Donostia San Sebastian city hall Spain",
+                "Basque Country industrial manufacturing facility",
+            ]
+        elif section == "Economía y geopolítica":
+            queries = [
+                "European financial district stock exchange traders",
+                "container port logistics industrial shipping",
+                "European central bank headquarters",
+            ]
+        elif section == "Cultura, sociedad y descubrimientos":
+            queries = [
+                "Spanish museum cultural heritage exhibition",
+                "archaeological excavation Spain historical site",
+                "library museum historical archive Spain",
+            ]
+        elif section == "Ciencia, investigación y tecnología":
+            queries = [
+                "scientific laboratory researchers Spain",
+                "medical research laboratory microscope",
+                "university science research facility",
+            ]
+        else:
+            queries = [
+                "public institution building Spain",
+                "industrial or public infrastructure Spain",
+            ]
+
+    unique = []
+    for query in queries:
+        query = re.sub(r"\s+", " ", query).strip()
+        if query and query not in unique:
+            unique.append(query)
+    return unique[:3]
+
+
+def fallback_visual_query(article: dict[str, Any]) -> str:
+    """Backward-compatible first thematic query for the article."""
+    queries = fallback_visual_queries(article)
+    return queries[0] if queries else "public institution building Spain"
+
 
 
 def generate_commons_queries(
@@ -830,9 +943,9 @@ def generate_commons_queries(
 ) -> dict[str, list[str]]:
     """Use Gemini to turn long headlines into precise, visual Commons search phrases."""
     queries = {
-        str(article.get("id") or article.get("url")): [
-            fallback_image_query(article), fallback_visual_query(article)
-        ]
+        str(article.get("id") or article.get("url")): list(dict.fromkeys(
+            [fallback_image_query(article)] + fallback_visual_queries(article)
+        ))[:3]
         for article in articles
     }
     if not api_key or not articles:
@@ -879,12 +992,15 @@ STORIES:
                 if len(cleaned) >= 2:
                     break
             if cleaned:
-                visual_fallback = fallback_visual_query(next(
+                story = next(
                     article for article in articles
                     if str(article.get("id") or article.get("url")) == story_id
-                ))
-                if visual_fallback not in cleaned:
-                    cleaned.append(visual_fallback)
+                )
+                for visual_fallback in fallback_visual_queries(story):
+                    if visual_fallback not in cleaned:
+                        cleaned.append(visual_fallback)
+                    if len(cleaned) >= 3:
+                        break
                 queries[story_id] = cleaned[:3]
         print(f"Gemini: consultas visuales preparadas para {sum(bool(v) for v in queries.values())}/{len(articles)} noticias.")
         for article in articles:
@@ -977,7 +1093,9 @@ def fetch_commons_candidates(
             descriptor_words = set(re.findall(
                 r"[a-záéíóúüñ0-9]{3,}", descriptor.lower()
             ))
-            if score < 0.18 or not (query_words & descriptor_words):
+            matched_words = query_words & descriptor_words
+            required_matches = 2 if len(query_words) >= 3 else 1
+            if score < 0.24 or len(matched_words) < required_matches:
                 continue
 
             candidate = usable_image_url(str(info.get("thumburl") or info.get("url") or ""))
@@ -1299,7 +1417,19 @@ def download_ranked_candidates(
         return None
 
     if all("illustrative" in item[1][1] for item in ranked):
-        return download_first_available([item[1] for item in ranked])
+        for heuristic_score, candidate in ranked:
+            image_url, source, referer, credit = candidate[:4]
+            result = download_inline_image(image_url, referer)
+            if result:
+                data, _subtype = result
+                article["image_relevance_score"] = round(heuristic_score, 3)
+                article["image_match_type"] = "illustrative"
+                print(
+                    f"Imagen ilustrativa elegida {article.get('id', '')}: "
+                    f"relevancia temática={heuristic_score:.2f}."
+                )
+                return data, "jpeg", image_url, source, credit
+        return None
 
     downloaded: list[tuple[tuple[str, str, str, str], bytes, float]] = []
     for heuristic_score, candidate in ranked[:4]:
@@ -1521,16 +1651,22 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
                     pass
         embed_candidates(missing, candidates, api_key)
 
-    # Theme-level images are only allowed after story-specific sources are exhausted.
+    # Theme-level images are allowed only after all story-specific sources fail.
+    # Every fallback search remains tied to this individual story; no generic photo is
+    # reused across unrelated articles.
     missing = [article for article in articles if not article.get("_image_data")]
     if missing:
-        # Candidates rejected in the story-specific passes must not be reconsidered here.
         for article in missing:
             candidates[id(article)] = []
+            theme_queries = fallback_visual_queries(article)
+            article["_image_search_queries"] = theme_queries
+            article["image_search_query"] = theme_queries[0] if theme_queries else ""
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {
                 pool.submit(
-                    fetch_commons_candidates, article, [fallback_visual_query(article)]
+                    fetch_commons_candidates,
+                    article,
+                    fallback_visual_queries(article),
                 ): article
                 for article in missing
             }
@@ -1540,43 +1676,16 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
                     results = future.result()
                     for image_url, _source, landing, credit in results:
                         candidates[id(article)].append((
-                            image_url, "commons-illustrative", landing,
+                            image_url,
+                            "commons-illustrative",
+                            landing,
                             (credit + " · imagen ilustrativa").strip(" ·"),
                         ))
                 except Exception as exc:
                     print(f"Commons ilustrativo falló ({type(exc).__name__}).")
         embed_candidates(missing, candidates, api_key)
         print(
-            f"Tras Wikimedia Commons ilustrativo: "
-            f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
-        )
-
-    # Absolute last fallback: reuse a small pool of real city photographs, labelled generic.
-    missing = [article for article in articles if not article.get("_image_data")]
-    if missing:
-        generic_record = {
-            "id": "COMMONS-GENERIC-PHOTO-POOL",
-            "headline": "City skyline",
-            "original_headline": "City skyline",
-        }
-        generic_results = fetch_commons_candidates(
-            generic_record, ["city skyline", "urban landscape", "street photography"]
-        )
-        generic_candidates = [
-            (
-                image_url, "commons-generic-illustrative", landing,
-                (credit + " · imagen ilustrativa general").strip(" ·"),
-            )
-            for image_url, _source, landing, credit in generic_results
-        ]
-        if generic_candidates:
-            for article in missing:
-                candidates[id(article)] = list(generic_candidates)
-            embed_candidates(missing, candidates, api_key)
-        else:
-            print("Commons no encontró fotografías generales para el último respaldo.")
-        print(
-            f"Tras Wikimedia Commons genérico: "
+            f"Tras Wikimedia Commons con consultas temáticas específicas: "
             f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
         )
 
