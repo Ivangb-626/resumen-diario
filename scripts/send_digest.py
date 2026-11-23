@@ -774,6 +774,40 @@ def fallback_image_query(article: dict[str, Any]) -> str:
     return " ".join(selected)
 
 
+def fallback_visual_query(article: dict[str, Any]) -> str:
+    """Return a transparent, section-specific illustrative-photo query as last resort."""
+    text = " ".join((
+        str(article.get("original_headline") or article.get("headline") or ""),
+        str(article.get("summary") or ""),
+    )).lower()
+    if any(term in text for term in ("data center", "data centre", "centro de datos", "centros de datos")):
+        return "data center server room server racks infrastructure"
+    if any(term in text for term in ("hermandad", "cofrad", "procesión", "procession", "holy week", "semana santa")):
+        return "Malaga Holy Week religious brotherhood procession"
+    if any(term in text for term in ("pyme", "pymes", "small business", "small and medium", "emprend")):
+        return "small business office entrepreneurs innovation"
+    if any(term in text for term in ("ferrovi", "tren", "railway", "rail", "estación")):
+        return "railway station train tracks Spain"
+    if any(term in text for term in ("pesquer", "fish", "flota", "fishing")):
+        return "fishing boats fishing fleet harbor Spain"
+    if any(term in text for term in ("elección", "elecciones", "parlamento", "congreso", "government", "gobierno")):
+        return "Spanish parliament Congress government building"
+    if any(term in text for term in ("banco central", "central bank", "mercados", "markets", "bolsa", "stocks")):
+        return "stock exchange trading floor financial markets"
+    if any(term in text for term in ("laboratorio", "neurociencia", "cerebro", "research", "investigación", "scientific")):
+        return "scientific research laboratory scientists"
+    section = str(article.get("section") or "")
+    if section == "España y Gipuzkoa":
+        return "Basque Country Donostia San Sebastian cityscape Spain"
+    if section == "Economía y geopolítica":
+        return "international business financial district container port"
+    if section == "Cultura, sociedad y descubrimientos":
+        return "museum cultural heritage exhibition library"
+    if section == "Ciencia, investigación y tecnología":
+        return "scientific laboratory research equipment"
+    return "city public buildings people daily life"
+
+
 def generate_commons_queries(
     articles: list[dict[str, Any]], api_key: str = ""
 ) -> dict[str, list[str]]:
@@ -828,6 +862,9 @@ STORIES:
             if cleaned:
                 queries[story_id] = cleaned
         print(f"Gemini: consultas visuales preparadas para {sum(bool(v) for v in queries.values())}/{len(articles)} noticias.")
+        for article in articles:
+            story_id = str(article.get("id") or article.get("url"))
+            print(f"Consulta visual {story_id}: {queries.get(story_id, [])}")
     except Exception as exc:
         print(f"Gemini no pudo afinar las consultas de imágenes ({type(exc).__name__}); se usan titulares.")
     return queries
@@ -1217,6 +1254,39 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
                 except Exception:
                     pass
         embed_candidates(missing, candidates)
+
+    # Last resort: if no story-specific photograph exists, use a genuinely
+    # non-empty Commons image illustrating the story's visible subject/category.
+    # These are explicitly labelled as illustrative in the email credit.
+    missing = [article for article in articles if not article.get("_image_data")]
+    if missing:
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(
+                    fetch_commons_candidates,
+                    article,
+                    [fallback_visual_query(article)],
+                ): article
+                for article in missing
+            }
+            for future in as_completed(futures):
+                article = futures[future]
+                try:
+                    results = future.result()
+                    for image_url, _source, landing, credit in results:
+                        candidates[id(article)].append((
+                            image_url,
+                            "commons-illustrative",
+                            landing,
+                            (credit + " · imagen ilustrativa").strip(" ·"),
+                        ))
+                except Exception as exc:
+                    print(f"Commons ilustrativo falló ({type(exc).__name__}).")
+        embed_candidates(missing, candidates)
+        print(
+            f"Tras Wikimedia Commons ilustrativo: "
+            f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
+        )
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     source_counts: dict[str, int] = {}
