@@ -282,9 +282,7 @@ CANDIDATOS:
         seen.add(sid)
         articles.append(item)
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
-    articles.sort(key=lambda a: (order.get(a.get("section"), 99), a.get("published", "")), reverse=False)
-    # Keep the agreed section order and show the newest stories first inside each section.
-    articles.sort(key=lambda a: order.get(a.get("section"), 99))
+    # Stable sorts preserve the agreed section order and newest-first order within each section.
     articles.sort(key=lambda a: a.get("published", ""), reverse=True)
     articles.sort(key=lambda a: order.get(a.get("section"), 99))
     return {"articles": articles}
@@ -478,7 +476,8 @@ def main() -> int:
             editorial = editorial_selection(stories, api_key)
             ai_used = True
         except Exception as exc:
-            print(f"Gemini no disponible; se usará el modo RSS: {type(exc).__name__}: {exc}", file=sys.stderr)
+            # Do not print exception details: HTTP errors can contain the API key URL.
+            print(f"Gemini no disponible; se usará el modo RSS ({type(exc).__name__}).", file=sys.stderr)
             editorial = fallback_selection(stories)
     else:
         print("GEMINI_API_KEY no configurada; se usará el modo RSS.", file=sys.stderr)
