@@ -73,22 +73,73 @@ class TextExtractor(HTMLParser):
             self.parts.append(value)
 
 
-class ImageMetaParser(HTMLParser):
-    """Extract the first Open Graph / Twitter image from an article page."""
+class ArticleImageParser(HTMLParser):
+    """Extract only article lead images from structured data and page metadata."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.image_url = ""
+        self.meta_images: list[str] = []
+        self.jsonld_blocks: list[str] = []
+        self._in_jsonld = False
+        self._jsonld_parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if self.image_url:
-            return
         values = {key.lower(): (value or "").strip() for key, value in attrs}
         if tag.lower() == "meta":
             key = (values.get("property") or values.get("name") or "").lower()
             if key in {"og:image", "og:image:url", "twitter:image", "twitter:image:src"}:
-                self.image_url = values.get("content", "")
+                if values.get("content"):
+                    self.meta_images.append(values["content"])
+        if tag.lower() == "script" and values.get("type", "").lower() == "application/ld+json":
+            self._in_jsonld = True
+            self._jsonld_parts = []
 
+    def handle_data(self, data: str) -> None:
+        if self._in_jsonld:
+            self._jsonld_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "script" and self._in_jsonld:
+            self.jsonld_blocks.append("".join(self._jsonld_parts))
+            self._in_jsonld = False
+            self._jsonld_parts = []
+
+
+def jsonld_article_images(raw: str) -> list[str]:
+    """Walk JSON-LD structures and return images only from Article-like objects."""
+    found: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+            return
+        if not isinstance(value, dict):
+            return
+        kind = value.get("@type", [])
+        kinds = [kind] if isinstance(kind, str) else kind if isinstance(kind, list) else []
+        is_article = any(str(item).lower() in {
+            "article", "newsarticle", "reportagearticle", "analysisnewsarticle",
+            "opinionnewsarticle", "blogposting",
+        } for item in kinds)
+        if is_article and value.get("image"):
+            images = value["image"] if isinstance(value["image"], list) else [value["image"]]
+            for image in images:
+                if isinstance(image, str):
+                    found.append(image)
+                elif isinstance(image, dict):
+                    candidate = image.get("url") or image.get("contentUrl")
+                    if isinstance(candidate, str):
+                        found.append(candidate)
+        for key in ("@graph", "mainEntity", "mainEntityOfPage", "hasPart"):
+            if key in value:
+                walk(value[key])
+
+    try:
+        walk(json.loads(raw))
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return found
 
 def usable_image_url(value: str, base_url: str = "") -> str:
     value = (value or "").strip()
@@ -412,86 +463,65 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
 
 
 
-def fetch_relevant_image(article: dict[str, Any]) -> tuple[str, str]:
-    """Find a story-specific Commons image using several progressively broader queries."""
-    headline = str(article.get("headline", "")).strip()
-    summary = str(article.get("summary", "")).strip()
-    if not headline:
+def fetch_article_image(article: dict[str, Any]) -> tuple[str, str]:
+    """Get the lead image from the publisher's own article metadata, never fuzzy image search."""
+    article_url = str(article.get("url", "")).strip()
+    if not article_url:
         return "", ""
-
-    # Full Spanish headlines often match poorly in Commons. Try the headline first,
-    # then a compact keyword query that keeps names, places and concrete subjects.
-    stopwords = {
-        "sobre", "desde", "hasta", "entre", "tras", "ante", "para", "como", "donde",
-        "cuando", "porque", "este", "esta", "estos", "estas", "también", "según",
-        "hacia", "contra", "pero", "porque", "their", "about", "after", "before",
-        "with", "from", "that", "this", "will", "into", "over", "under",
-    }
-    words = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9-]{2,}", headline)
-    keywords = [word for word in words if word.lower() not in stopwords]
-    compact = " ".join(keywords[:7])
-    queries = list(dict.fromkeys(q for q in (headline[:180], compact, " ".join(keywords[:4])) if q))
-
-    for query in queries:
-        params = urllib.parse.urlencode({
-            "action": "query",
-            "generator": "search",
-            "gsrsearch": query,
-            "gsrnamespace": 6,
-            "gsrlimit": 10,
-            "prop": "imageinfo",
-            "iiprop": "url|mime|size|extmetadata",
-            "iiurlwidth": 900,
-            "format": "json",
-        })
-        request = urllib.request.Request(
-            "https://commons.wikimedia.org/w/api.php?" + params,
-            headers={"User-Agent": "resumen-diario/2.0 (https://github.com/Ivangb-626/resumen-diario)"},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-            pages = payload.get("query", {}).get("pages", {})
-            candidates = sorted(pages.values(), key=lambda page: page.get("index", 999))
-            for page in candidates:
-                info = (page.get("imageinfo") or [{}])[0]
-                width, height = info.get("width", 0), info.get("height", 0)
-                # Check the generated thumbnail, not the original file MIME: Commons
-                # can create a JPEG/PNG preview even when the source is SVG or WebP.
-                image_url = usable_image_url(info.get("thumburl") or "")
-                if not image_url or min(width, height) < 300:
-                    continue
-                metadata = info.get("extmetadata", {})
-                license_name = clean_html(metadata.get("LicenseShortName", {}).get("value", ""))
-                artist = clean_html(metadata.get("Artist", {}).get("value", ""))
-                description_url = usable_image_url(info.get("descriptionurl", ""))
-                credit_parts = [part for part in (artist, license_name) if part]
-                credit = " · ".join(credit_parts)
-                if description_url:
-                    credit = f"{credit} · {description_url}" if credit else description_url
-                return image_url, credit
-        except Exception as exc:
-            print(f"Commons: búsqueda «{query[:55]}» fallida ({type(exc).__name__}: {str(exc)[:120]}).")
-    return "", ""
-
-
-def fetch_article_image(article_url: str) -> str:
-    """Fallback: extract the publisher's own article image."""
     request = urllib.request.Request(
         article_url,
         headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=12) as response:
-            if "text/html" not in response.headers.get("Content-Type", "").lower():
-                return ""
-            page = response.read(1_500_000).decode("utf-8", errors="replace")
-        parser = ImageMetaParser()
+        with urllib.request.urlopen(request, timeout=18) as response:
+            content_type = response.headers.get("Content-Type", "").lower()
+            final_url = response.geturl()
+            if "text/html" not in content_type:
+                return "", ""
+            page = response.read(2_500_000).decode("utf-8", errors="replace")
+        parser = ArticleImageParser()
         parser.feed(page)
-        return usable_image_url(parser.image_url, article_url)
+
+        # Structured NewsArticle image is the strongest signal: the publisher
+        # explicitly associates it with this exact article.
+        candidates: list[str] = []
+        for block in parser.jsonld_blocks:
+            candidates.extend(jsonld_article_images(block))
+        # OG/Twitter are page-level metadata, used only after structured article data.
+        candidates.extend(parser.meta_images)
+
+        for candidate in candidates:
+            image_url = usable_image_url(candidate, final_url)
+            if not image_url:
+                continue
+            host = urllib.parse.urlparse(image_url).netloc.lower()
+            if "google.com" in host or "googleusercontent.com" in host:
+                continue
+            return image_url, final_url
     except Exception as exc:
-        print(f"Imagen del medio no disponible ({type(exc).__name__}).")
-        return ""
+        print(f"No se pudo extraer imagen del medio ({type(exc).__name__}: {str(exc)[:120]}).")
+    return "", ""
+
+
+def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
+    """Download a small JPEG/PNG image for reliable inline email display."""
+    request = urllib.request.Request(
+        image_url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; resumen-diario/2.0)"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=18) as response:
+            content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            if content_type not in {"image/jpeg", "image/png"}:
+                return None
+            data = response.read(1_500_001)
+        if not data or len(data) > 1_500_000:
+            return None
+        subtype = content_type.split("/", 1)[1]
+        return data, subtype
+    except Exception as exc:
+        print(f"No se pudo descargar imagen {urllib.parse.urlparse(image_url).netloc} ({type(exc).__name__}).")
+        return None
 
 def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
     """Download a small raster image suitable for embedding in an email."""
@@ -515,39 +545,27 @@ def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
 
 
 def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Find a relevant Commons photograph for each story, then embed it in the email."""
+    """Use publisher-verified article lead images; omit images when relevance is uncertain."""
     articles = editorial.get("articles", [])
-    # Always search from the actual headline and summary first; RSS/Google News
-    # thumbnails are only retained as a fallback when Commons has no good match.
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_relevant_image, article): article for article in articles}
-        for future in as_completed(futures):
-            article = futures[future]
-            try:
-                image_url, credit = future.result()
-                if image_url:
-                    article["image_url"] = image_url
-                    article["image_credit"] = credit
-            except Exception:
-                pass
-
-    # If Commons has no match, try the publisher's own article preview, then RSS.
-    missing = [a for a in articles if not usable_image_url(str(a.get("image_url", "")))]
+    # Do not use Commons keyword matches or Google News feed thumbnails: they can be
+    # visually unrelated. The image must come from this article page's own JSON-LD/OG.
     with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(fetch_article_image, str(a.get("url", ""))): a for a in missing}
+        futures = {pool.submit(fetch_article_image, article): article for article in articles}
         for future in as_completed(futures):
             article = futures[future]
             try:
-                article["image_url"] = future.result()
+                image_url, publisher_url = future.result()
+                article["image_url"] = image_url
+                if image_url:
+                    article["image_source_page"] = publisher_url
             except Exception:
                 article["image_url"] = ""
 
-    # Download thumbnails in parallel, keeping the total message reasonably small.
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
-            pool.submit(download_inline_image, usable_image_url(str(a.get("image_url", "")))): (index, a)
-            for index, a in enumerate(articles, 1)
-            if usable_image_url(str(a.get("image_url", "")))
+            pool.submit(download_inline_image, str(article.get("image_url", ""))): (index, article)
+            for index, article in enumerate(articles, 1)
+            if article.get("image_url")
         }
         for future in as_completed(futures):
             index, article = futures[future]
@@ -558,15 +576,17 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                     article["_image_data"] = data
                     article["_image_subtype"] = subtype
                     article["_image_cid"] = f"news-image-{index}@resumen-diario"
+                else:
+                    article["image_url"] = ""
             except Exception:
-                pass
+                article["image_url"] = ""
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     print(
-        f"Imágenes incrustadas en el correo: {attached}/{len(articles)} noticias. "
-        f"Con URL: {sum(1 for article in articles if article.get('image_url'))}; "
-        f"sin imagen: {sum(1 for article in articles if not article.get('_image_data'))}."
+        f"Imágenes verificadas del propio artículo e incrustadas: {attached}/{len(articles)}. "
+        f"Sin imagen fiable: {len(articles) - attached}."
     )
+
 
 def fetch_yahoo_quote(symbol: str) -> dict[str, Any] | None:
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol, safe='')}"
