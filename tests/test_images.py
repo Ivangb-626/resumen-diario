@@ -159,5 +159,23 @@ class ArticleImageTests(unittest.TestCase):
         self.assertEqual(result[3], "rss")
 
 
+    def test_14_google_news_thumbnail_cdn_is_allowed(self):
+        page = (
+            b'<html><head><meta property="og:image" '
+            b'content="https://lh3.googleusercontent.com/news-image=w1200-h630">'
+            b'</head></html>'
+        )
+        with patch.object(digest.urllib.request, "urlopen",
+                          return_value=FakeResponse(page)):
+            urls, _ = digest.fetch_article_images({
+                "url": "https://news.google.com/rss/articles/example",
+                "headline": "A current news story",
+            })
+        self.assertIn(
+            "https://lh3.googleusercontent.com/news-image=w1200-h630",
+            urls,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
