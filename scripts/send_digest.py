@@ -113,7 +113,7 @@ def rss_image(item: ET.Element, raw_description: str) -> str:
                               or media_type.startswith("image/")):
                 return candidate
     # Some feeds put the thumbnail directly inside the description HTML.
-    match = re.search(r"<img\\b[^>]*?src=[\\\"']([^\\\"']+)", raw_description or "", re.I)
+    match = re.search(r"<img\b[^>]*?src=[\"']([^\"']+)", raw_description or "", re.I)
     return usable_image_url(html.unescape(match.group(1))) if match else ""
 
 
@@ -526,7 +526,10 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]], ai_use
         plain.append(f"{market['name']}: {fmt_number(market['price'], market['currency'])} ({sign}{market['change_pct']:.2f}%)")
     plain.append("\nDatos de mercado indicativos. Las variaciones comparan los dos últimos cierres disponibles.")
     if not ai_used:
-        plain.append("\nAviso: falta GEMINI_API_KEY; se muestran extractos RSS sin análisis editorial.")
+        if not os.environ.get("GEMINI_API_KEY", "").strip():
+            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran extractos RSS sin análisis editorial.")
+        else:
+            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran extractos RSS.")
     msg.set_content("\n".join(plain))
 
     cards = []
