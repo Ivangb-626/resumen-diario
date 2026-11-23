@@ -28,7 +28,7 @@ jobs:
 
       - name: Enviar lista de pendientes
         env:
-          GMAIL_ADDRESS: \${{ secrets.GMAIL_ADDRESS }}
-          GMAIL_RECIPIENT: \${{ secrets.GMAIL_RECIPIENT }}
-          GMAIL_APP_PASSWORD: \${{ secrets.GMAIL_APP_PASSWORD }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_RECIPIENT: ${{ secrets.GMAIL_RECIPIENT }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: python scripts/send_pending.py
