@@ -271,6 +271,7 @@ class Story:
     excerpt: str
     published: datetime
     image_url: str = ""
+    source_url: str = ""
 
 
 def fetch_query(section: str, query: str) -> list[Story]:
@@ -302,6 +303,7 @@ def fetch_query(section: str, query: str) -> list[Story]:
             continue
         source_node = item.find("source")
         source = (source_node.text or "").strip() if source_node is not None else "Fuente RSS"
+        source_url = (source_node.attrib.get("url") or "").strip() if source_node is not None else ""
         raw_description = item.findtext("description") or ""
         excerpt = clean_html(raw_description)
         image_url = rss_image(item, raw_description)
@@ -317,6 +319,7 @@ def fetch_query(section: str, query: str) -> list[Story]:
             excerpt=excerpt[:700],
             published=published,
             image_url=image_url,
+            source_url=source_url,
         ))
     return found
 
@@ -397,7 +400,8 @@ def gemini_request(prompt: str, api_key: str, retry_delays: tuple[int, ...] = (5
 def editorial_selection(stories: list[Story], api_key: str) -> dict[str, Any]:
     candidates = [{
         "id": s.id, "section_hint": s.section, "title": s.title,
-        "source": s.source, "published": s.published.isoformat(),
+        "source": s.source, "source_url": s.source_url,
+        "published": s.published.isoformat(),
         "excerpt": s.excerpt, "url": s.link, "image_url": s.image_url,
     } for s in stories]
     prompt = f"""
@@ -470,6 +474,7 @@ CANDIDATOS:
         if datetime.now(timezone.utc) - source.published > MAX_AGE:
             continue
         item["url"] = source.link
+        item["image_source_url"] = source.source_url
         item["source_name"] = source.source
         item["published"] = source.published.isoformat()
         item["image_url"] = source.image_url
@@ -520,6 +525,7 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
             ),
             "source_name": story.source,
             "url": story.link,
+            "image_source_url": story.source_url,
             "published": story.published.isoformat(),
             "image_url": story.image_url,
             "rss_image_url": story.image_url,
@@ -577,9 +583,38 @@ def image_url_is_generic(image_url: str) -> bool:
     ))
 
 
+def is_google_news_url(value: str) -> bool:
+    host = (urllib.parse.urlparse(value).hostname or "").lower()
+    return host == "news.google.com" or host.endswith(".news.google.com")
+
+
+def is_article_level_source_url(value: str) -> bool:
+    parsed = urllib.parse.urlparse(value)
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.strip("/")
+    return (
+        parsed.scheme in {"http", "https"}
+        and host
+        and not is_google_news_url(value)
+        and len(path) >= 4
+    )
+
+
 def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
     """Return several usable image candidates from the exact story page."""
     article_url = str(article.get("url", "")).strip()
+    source_url = str(article.get("image_source_url", "")).strip()
+    # Google News RSS links can open a Google landing page whose Open Graph image
+    # is just the Google News logo. Prefer an article-level origin URL from <source>;
+    # if RSS provides only the publisher homepage, don't scrape the wrapper at all.
+    if is_google_news_url(article_url):
+        if is_article_level_source_url(source_url):
+            article_url = source_url
+        else:
+            print("Imagen publisher: se omite la página intermedia de Google News sin URL de artículo original.")
+            return [], ""
+    elif is_article_level_source_url(source_url):
+        article_url = source_url
     if not article_url:
         return [], ""
     request = urllib.request.Request(
