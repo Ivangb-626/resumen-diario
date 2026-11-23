@@ -894,5 +894,166 @@ class ArticleImageTests(unittest.TestCase):
 
 
 
+    def test_46_story_deduplication_ignores_minor_title_variations(self):
+        self.assertTrue(digest.are_duplicate_stories(
+            "Spain announces new railway safety plan after Adamuz accident",
+            "Spain announces railway safety plan after the Adamuz accident",
+        ))
+        self.assertFalse(digest.are_duplicate_stories(
+            "Spain announces railway safety plan after Adamuz accident",
+            "Swiss franc gains ground against the euro",
+        ))
+
+    def test_47_editorial_selection_removes_same_story_from_two_publishers(self):
+        now = digest.datetime.now(digest.timezone.utc)
+        stories = [
+            digest.Story(
+                id="N001", section="España y Gipuzkoa", query="railway",
+                title="Spain announces new railway safety plan after Adamuz accident",
+                link="https://news.google.com/rss/articles/story-one",
+                source="Publisher One", excerpt="Spain announces a railway safety plan.",
+                published=now,
+            ),
+            digest.Story(
+                id="N002", section="España y Gipuzkoa", query="trains",
+                title="Spain announces railway safety plan after the Adamuz accident",
+                link="https://news.google.com/rss/articles/story-two",
+                source="Publisher Two", excerpt="The same railway safety plan was announced.",
+                published=now - digest.timedelta(minutes=5),
+            ),
+            digest.Story(
+                id="N003", section="Economía y geopolítica", query="currency",
+                title="Swiss franc gains ground against the euro",
+                link="https://news.google.com/rss/articles/story-three",
+                source="Publisher Three", excerpt="The currency strengthened.",
+                published=now,
+            ),
+        ]
+        response = json.dumps({"articles": [
+            {"id": "N001", "section": "España y Gipuzkoa",
+             "headline": "España anuncia un nuevo plan de seguridad ferroviaria",
+             "summary": "Resumen de la noticia.", "why_it_matters": "Importa.",
+             "source_name": "Publisher One", "url": stories[0].link},
+            {"id": "N002", "section": "España y Gipuzkoa",
+             "headline": "España anuncia un plan de seguridad ferroviaria tras Adamuz",
+             "summary": "La misma noticia contada por otra fuente.", "why_it_matters": "Importa.",
+             "source_name": "Publisher Two", "url": stories[1].link},
+            {"id": "N003", "section": "Economía y geopolítica",
+             "headline": "El franco suizo gana terreno frente al euro",
+             "summary": "Otra noticia.", "why_it_matters": "Importa.",
+             "source_name": "Publisher Three", "url": stories[2].link},
+        ]})
+        with patch.object(digest, "gemini_request", return_value=response):
+            result = digest.editorial_selection(stories, "test-key")
+        self.assertEqual([item["id"] for item in result["articles"]], ["N003", "N001"])
+
+    def test_48_gdelt_searches_each_story_without_shared_or_query(self):
+        requests = []
+
+        def fake_urlopen(request, timeout=18):
+            requests.append(request.full_url)
+            return FakeResponse(json.dumps({"articles": []}).encode(), "application/json")
+
+        articles = [
+            {"id": "N048A", "original_headline": "Adamuz railway accident investigation",
+             "url": "https://news.google.com/story-a"},
+            {"id": "N048B", "original_headline": "Swiss franc gains against euro",
+             "url": "https://news.google.com/story-b"},
+        ]
+        with patch.object(digest.urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = digest.fetch_gdelt_images(articles)
+
+        self.assertEqual(result, {})
+        self.assertEqual(len(requests), 2)
+        queries = [
+            digest.urllib.parse.parse_qs(digest.urllib.parse.urlparse(url).query)["query"][0]
+            for url in requests
+        ]
+        self.assertTrue(any("Adamuz railway accident investigation" in q for q in queries))
+        self.assertTrue(any("Swiss franc gains against euro" in q for q in queries))
+        self.assertTrue(all(" OR " not in q for q in queries))
+
+    def test_49_gdelt_keeps_image_results_attached_to_their_own_story(self):
+        def fake_urlopen(request, timeout=18):
+            query = digest.urllib.parse.parse_qs(
+                digest.urllib.parse.urlparse(request.full_url).query
+            )["query"][0]
+            title = query.strip('"')
+            slug = "adamuz" if "Adamuz" in title else "franc"
+            response = {"articles": [{
+                "title": title,
+                "domain": "publisher.example",
+                "socialimage": f"https://images.example/{slug}.jpg",
+            }]}
+            return FakeResponse(json.dumps(response).encode(), "application/json")
+
+        articles = [
+            {"id": "N049A", "original_headline": "Adamuz railway accident investigation",
+             "url": "https://news.google.com/story-a",
+             "image_source_url": "https://publisher.example/story-a"},
+            {"id": "N049B", "original_headline": "Swiss franc gains against euro",
+             "url": "https://news.google.com/story-b",
+             "image_source_url": "https://publisher.example/story-b"},
+        ]
+        with patch.object(digest.urllib.request, "urlopen", side_effect=fake_urlopen):
+            result = digest.fetch_gdelt_images(articles)
+
+        self.assertEqual(result["N049A"], "https://images.example/adamuz.jpg")
+        self.assertEqual(result["N049B"], "https://images.example/franc.jpg")
+        self.assertNotEqual(result["N049A"], result["N049B"])
+
+    def test_50_image_cid_uses_article_id_not_fallback_group_position(self):
+        article = {"id": "N050", "headline": "Una noticia"}
+        candidate = ("https://img.example/photo.jpg", "commons", "", "")
+        with patch.object(
+            digest, "download_ranked_candidates",
+            return_value=(b"photo-bytes", "jpeg", candidate[0], "commons", ""),
+        ):
+            digest.embed_candidates([article], {id(article): [candidate]}, api_key="")
+
+        self.assertEqual(article["_image_cid"], "news-image-N050@resumen-diario")
+
+    def test_51_duplicate_image_is_replaced_with_story_specific_alternative(self):
+        first = {
+            "id": "N051A", "image_url": "https://img.example/shared.jpg",
+            "_image_data": b"first", "_image_subtype": "jpeg",
+            "_image_cid": "old-first",
+        }
+        second = {
+            "id": "N051B", "image_url": "https://img.example/shared.jpg",
+            "_image_data": b"second", "_image_subtype": "jpeg",
+            "_image_cid": "old-second",
+        }
+        second_candidates = [
+            ("https://img.example/shared.jpg", "commons", "", ""),
+            ("https://img.example/unique.jpg", "publisher", "", ""),
+        ]
+
+        def alternative(_article, candidates, _api_key="", excluded_urls=None):
+            self.assertIn("https://img.example/shared.jpg", excluded_urls or set())
+            return (
+                b"unique", "jpeg", "https://img.example/unique.jpg", "publisher", ""
+            )
+
+        with patch.object(digest, "download_ranked_candidates", side_effect=alternative):
+            digest.ensure_unique_article_images(
+                [first, second],
+                {id(first): [], id(second): second_candidates},
+                api_key="",
+            )
+
+        self.assertEqual(first["image_url"], "https://img.example/shared.jpg")
+        self.assertEqual(second["image_url"], "https://img.example/unique.jpg")
+        self.assertNotEqual(first["_image_cid"], second["_image_cid"])
+
+
+    def test_52_image_url_identity_collapses_google_thumbnail_sizes(self):
+        small = "https://lh3.googleusercontent.com/photo-123=w300-h300-p-k-no-nu"
+        large = "https://lh3.googleusercontent.com/photo-123=w1200-h800"
+        self.assertEqual(
+            digest.image_url_identity(small),
+            digest.image_url_identity(large),
+        )
+
 if __name__ == "__main__":
     unittest.main()

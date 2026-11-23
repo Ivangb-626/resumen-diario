@@ -32,6 +32,19 @@ def main() -> int:
     output_dir = Path("image-samples")
     output_dir.mkdir(parents=True, exist_ok=True)
     attached = [article for article in articles if article.get("_image_data")]
+    image_urls = [digest.image_url_identity(str(article.get("image_url") or "")) for article in attached]
+    unique_image_urls = {url for url in image_urls if url}
+    repeated_image_count = len(image_urls) - len(unique_image_urls)
+    if repeated_image_count:
+        raise RuntimeError(
+            f"Hay {repeated_image_count} imágenes repetidas entre noticias; "
+            "cada noticia debe tener su propia fotografía."
+        )
+    content_ids = [str(article.get("_image_cid") or "") for article in attached]
+    if len(content_ids) != len(set(content_ids)):
+        raise RuntimeError(
+            "Hay identificadores CID repetidos; las imágenes podrían cruzarse entre noticias."
+        )
     source_counts = Counter(
         str(article.get("image_source") or "desconocido") for article in attached
     )
@@ -96,6 +109,7 @@ def main() -> int:
     print(f"Fotografías seleccionadas por metadatos, sin verificación visual: {len(metadata_only)}")
     print(f"Fotografías ilustrativas temáticas: {len(illustrative)}")
     print(f"Sin fotografía: {len(articles) - len(attached)}")
+    print(f"Imágenes únicas por noticia: {len(unique_image_urls)}/{len(attached)}")
     print(f"Fuentes: {dict(source_counts)}")
     print(f"Relación estimada: {dict(relation_counts)}")
     print(f"Galería guardada en: {output_dir.resolve()}")

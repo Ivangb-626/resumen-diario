@@ -15,6 +15,7 @@ import re
 import smtplib
 import ssl
 import threading
+import unicodedata
 import sys
 import time
 import urllib.parse
@@ -276,6 +277,90 @@ class Story:
     source_url: str = ""
 
 
+STORY_TITLE_STOPWORDS = {
+    "the", "and", "for", "with", "from", "that", "this", "over", "after",
+    "una", "uno", "unos", "unas", "los", "las", "del", "por", "para", "con",
+    "sobre", "entre", "como", "desde", "hacia", "tras", "segun", "según",
+    "que", "sus", "son", "ser", "fue", "han", "más", "mas", "una", "new",
+    "newly", "says", "said", "today", "ahora", "este", "esta", "estos",
+    "estas", "segun", "ante", "hace", "their", "its", "are", "was", "were",
+}
+
+
+def normalize_story_title(value: str) -> str:
+    """Normalize titles across punctuation, case and accents for duplicate checks."""
+    decomposed = unicodedata.normalize("NFKD", (value or "").lower())
+    plain = "".join(char for char in decomposed if not unicodedata.combining(char))
+    tokens = [
+        token for token in re.findall(r"[a-z0-9]{3,}", plain)
+        if token not in STORY_TITLE_STOPWORDS
+    ]
+    return " ".join(tokens)
+
+
+def canonical_story_url(value: str) -> str:
+    """Strip tracking parameters so the same publisher URL has one stable identity."""
+    try:
+        parsed = urllib.parse.urlparse((value or "").strip())
+        host = (parsed.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        path = urllib.parse.unquote(parsed.path or "/").rstrip("/").lower()
+        return f"{host}{path}" if host else ""
+    except Exception:
+        return ""
+
+
+def are_duplicate_stories(
+    title_a: str, title_b: str, url_a: str = "", url_b: str = ""
+) -> bool:
+    """Conservatively detect the same story syndicated under slightly different titles."""
+    first_url, second_url = canonical_story_url(url_a), canonical_story_url(url_b)
+    if first_url and second_url and first_url == second_url:
+        return True
+
+    first = normalize_story_title(title_a)
+    second = normalize_story_title(title_b)
+    if not first or not second:
+        return False
+    if first == second:
+        return True
+
+    first_tokens, second_tokens = set(first.split()), set(second.split())
+    if min(len(first_tokens), len(second_tokens)) < 4:
+        return False
+    shared = first_tokens & second_tokens
+    containment = len(shared) / max(1, min(len(first_tokens), len(second_tokens)))
+    jaccard = len(shared) / max(1, len(first_tokens | second_tokens))
+    sequence = difflib.SequenceMatcher(None, first, second).ratio()
+    return (
+        (containment >= 0.88 and jaccard >= 0.68)
+        or (sequence >= 0.88 and jaccard >= 0.72)
+    )
+
+
+def deduplicate_story_records(
+    records: list[Story], label: str
+) -> list[Story]:
+    """Keep the newest copy of a story across feeds and search queries."""
+    kept: list[Story] = []
+    removed = 0
+    for story in sorted(records, key=lambda item: item.published, reverse=True):
+        duplicate = any(
+            are_duplicate_stories(
+                story.title, existing.title, story.link, existing.link
+            )
+            for existing in kept
+        )
+        if duplicate:
+            removed += 1
+            continue
+        kept.append(story)
+    if removed:
+        print(f"{label}: {removed} noticias duplicadas descartadas.")
+    return kept
+
+
 def fetch_query(section: str, query: str) -> list[Story]:
     params = urllib.parse.urlencode({
         "q": f"{query} when:1d",
@@ -340,18 +425,10 @@ def collect_stories() -> list[Story]:
             except Exception as exc:
                 failures.append(f"{section}/{query}: {type(exc).__name__}")
 
-    # Deduplicate by normalized title and URL; preserve the freshest copy.
-    unique: dict[str, Story] = {}
-    for story in candidates:
-        key = re.sub(r"[^a-z0-9áéíóúüñ]+", "", story.title.lower())
-        if not key:
-            continue
-        current = unique.get(key)
-        if current is None or story.published > current.published:
-            unique[key] = story
-
+    # Collapse exact and near-identical headlines across the overlapping RSS queries.
+    stories = deduplicate_story_records(candidates, "RSS")
     now = datetime.now(timezone.utc)
-    stories = sorted(unique.values(), key=lambda s: s.published, reverse=True)
+    stories = sorted(stories, key=lambda s: s.published, reverse=True)
     # Bound the model input while keeping a broad cross-section of fresh results.
     stories = stories[:70]
     for index, story in enumerate(stories, 1):
@@ -455,6 +532,9 @@ REGLAS ESTRICTAS:
 - No conviertas una noticia antigua en novedad. Descarta candidatos fuera de ventana.
 - No incluyas empleo, prácticas ni ofertas laborales.
 - No incluyas el seguimiento de mercados aquí; se genera por separado.
+- No selecciones dos artículos que relaten el mismo anuncio, accidente, decisión o acontecimiento
+  desde medios distintos. Elige la versión más completa y fiable; conserva noticias distintas
+  aunque pertenezcan al mismo tema general.
 - Devuelve JSON válido con esta forma exacta:
 {{"articles":[{{"id":"N001","section":"...","headline":"...","summary":"...","why_it_matters":"...","source_name":"...","url":"...","published":"..."}}]}}
 Si no hay noticias adecuadas, devuelve {{"articles":[]}}.
@@ -483,6 +563,26 @@ CANDIDATOS:
         item["original_headline"] = source.title
         seen.add(sid)
         articles.append(item)
+    articles.sort(key=lambda item: item.get("published", ""), reverse=True)
+    unique_articles: list[dict[str, Any]] = []
+    for article in articles:
+        duplicate = next((
+            previous for previous in unique_articles
+            if are_duplicate_stories(
+                str(article.get("original_headline") or article.get("headline") or ""),
+                str(previous.get("original_headline") or previous.get("headline") or ""),
+                str(article.get("url") or ""), str(previous.get("url") or ""),
+            )
+        ), None)
+        if duplicate:
+            print(
+                "Editorial: historia duplicada descartada: "
+                f"{str(article.get('headline') or '')[:100]}"
+            )
+            continue
+        unique_articles.append(article)
+    articles = unique_articles
+
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
     # Stable sorts preserve the agreed section order and newest-first order within each section.
     articles.sort(key=lambda a: a.get("published", ""), reverse=True)
@@ -532,6 +632,20 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
             "rss_image_url": story.image_url,
             "original_headline": story.title,
         })
+    unique_articles: list[dict[str, Any]] = []
+    for article in articles:
+        duplicate = next((
+            previous for previous in unique_articles
+            if are_duplicate_stories(
+                str(article.get("original_headline") or article.get("headline") or ""),
+                str(previous.get("original_headline") or previous.get("headline") or ""),
+                str(article.get("url") or ""), str(previous.get("url") or ""),
+            )
+        ), None)
+        if duplicate:
+            continue
+        unique_articles.append(article)
+    articles = unique_articles
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
     articles.sort(key=lambda item: item.get("published", ""), reverse=True)
     articles.sort(key=lambda item: order.get(item.get("section"), 99))
@@ -574,6 +688,26 @@ def image_token_overlap(left: str, right: str) -> float:
         if word not in ignored
     }
     return len(a & b) / max(1, len(a))
+
+
+def image_url_identity(image_url: str) -> str:
+    """Normalize resize/query variants so one underlying image cannot be reused."""
+    try:
+        parsed = urllib.parse.urlparse(image_url)
+        host = (parsed.hostname or "").lower()
+        path = parsed.path or ""
+        if host == "googleusercontent.com" or host.endswith(".googleusercontent.com"):
+            path = re.sub(
+                r"=(?:w\d+(?:-h\d+)?|s\d+)(?:-[a-z0-9-]+)?$",
+                "", path, flags=re.I,
+            )
+        if host.endswith("wikimedia.org"):
+            path = re.sub(r"/\d+px-[^/]+$", "", path, flags=re.I)
+        if parsed.scheme and host:
+            return f"{parsed.scheme.lower()}://{host}{path}"
+        return image_url
+    except Exception:
+        return image_url
 
 
 def image_url_is_generic(image_url: str) -> bool:
@@ -722,62 +856,90 @@ def fetch_article_images(article: dict[str, Any]) -> tuple[list[str], str]:
 
 
 def fetch_gdelt_images(articles: list[dict[str, Any]]) -> dict[str, str]:
-    """Search GDELT in small title batches; it is a fallback, not a single point of failure."""
+    """Search GDELT independently for each story; never share a multi-story result pool."""
     if not articles:
         return {}
-    batches = [articles[index:index + 5] for index in range(0, len(articles), 5)]
-    mapped: dict[str, str] = {}
 
-    def fetch_batch(batch: list[dict[str, Any]]) -> dict[str, str]:
-        titles = [str(a.get("original_headline") or a.get("headline") or "").strip()
-                  for a in batch]
-        titles = [t for t in titles if len(t) >= 12]
-        if not titles:
-            return {}
-        query = "(" + " OR ".join('"' + t.replace('"', " ")[:150] + '"' for t in titles) + ")"
+    def fetch_one(article: dict[str, Any]) -> tuple[str, str]:
+        original = str(article.get("original_headline") or article.get("headline") or "").strip()
+        if len(original) < 12:
+            return str(article.get("id") or article.get("url") or ""), ""
+
+        # One request per article avoids the previous OR-batched query, which could
+        # surface the same social image for multiple unrelated headlines.
+        query = '"' + original.replace('"', " ")[:180] + '"'
         params = urllib.parse.urlencode({
-            "query": query, "mode": "artlist", "format": "json",
-            "timespan": "3d", "maxrecords": "75", "sort": "HybridRel",
+            "query": query,
+            "mode": "artlist",
+            "format": "json",
+            "timespan": "3d",
+            "maxrecords": "30",
+            "sort": "HybridRel",
         })
         request = urllib.request.Request(
             "https://api.gdeltproject.org/api/v2/doc/doc?" + params,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=16) as response:
-                results = json.loads(response.read().decode("utf-8", errors="replace")).get("articles", [])
+            with urllib.request.urlopen(request, timeout=18) as response:
+                results = json.loads(
+                    response.read().decode("utf-8", errors="replace")
+                ).get("articles", [])
         except Exception as exc:
-            print(f"GDELT lote sin respuesta ({type(exc).__name__}: {str(exc)[:90]}).")
-            return {}
-        batch_result: dict[str, str] = {}
-        for article in batch:
-            original = str(article.get("original_headline") or article.get("headline") or "")
-            article_domain = (urllib.parse.urlparse(str(article.get("url", ""))).hostname or "").lower()
-            best_url, best_score = "", 0.0
-            for candidate in results:
-                candidate_image = usable_image_url(str(candidate.get("socialimage") or ""))
-                candidate_title = str(candidate.get("title") or "")
-                candidate_domain = str(candidate.get("domain") or "").lower()
-                score = image_text_score(original, candidate_title)
-                same_domain = bool(article_domain and (
-                    candidate_domain == article_domain or candidate_domain.endswith("." + article_domain)
-                    or article_domain.endswith("." + candidate_domain)
-                ))
-                threshold = 0.38 if same_domain else 0.56
-                if candidate_image and not image_url_is_generic(candidate_image) and score >= threshold and score > best_score:
-                    best_url, best_score = candidate_image, score
-            if best_url:
-                batch_result[str(article.get("id") or article.get("url"))] = best_url
-        return batch_result
+            print(
+                f"GDELT por noticia sin respuesta ({type(exc).__name__}: "
+                f"{str(exc)[:90]}): {original[:80]}"
+            )
+            return str(article.get("id") or article.get("url") or ""), ""
 
+        source_url = str(article.get("image_source_url") or article.get("url") or "")
+        article_domain = (urllib.parse.urlparse(source_url).hostname or "").lower()
+        best_url, best_score, best_descriptor = "", 0.0, ""
+        for candidate in results:
+            candidate_title = str(candidate.get("title") or "").strip()
+            candidate_image = usable_image_url(str(candidate.get("socialimage") or ""))
+            candidate_domain = str(candidate.get("domain") or "").lower()
+            if not candidate_image or image_url_is_generic(candidate_image) or not candidate_title:
+                continue
+
+            same_domain = bool(article_domain and (
+                candidate_domain == article_domain
+                or candidate_domain.endswith("." + article_domain)
+                or article_domain.endswith("." + candidate_domain)
+            ))
+            score = image_text_score(original, candidate_title)
+            token_overlap = image_token_overlap(original, candidate_title)
+            threshold = 0.38 if same_domain else 0.58
+            if score < threshold or token_overlap < 0.28:
+                continue
+            if score > best_score:
+                best_url, best_score = candidate_image, score
+                best_descriptor = " ".join(part for part in (
+                    candidate_title, candidate_domain
+                ) if part)
+
+        if best_url:
+            article.setdefault("_image_candidate_descriptors", {})[best_url] = best_descriptor
+            print(
+                f"GDELT individual {article.get('id', '')}: coincidencia "
+                f"{best_score:.2f} para {original[:80]}"
+            )
+        return str(article.get("id") or article.get("url") or ""), best_url
+
+    mapped: dict[str, str] = {}
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(fetch_batch, batch) for batch in batches]
+        futures = [pool.submit(fetch_one, article) for article in articles]
         for future in as_completed(futures):
             try:
-                mapped.update(future.result())
-            except Exception:
-                pass
-    print(f"GDELT: imágenes coincidentes para {len(mapped)}/{len(articles)} noticias.")
+                story_id, image_url = future.result()
+                if story_id and image_url:
+                    mapped[story_id] = image_url
+            except Exception as exc:
+                print(f"GDELT individual falló ({type(exc).__name__}).")
+    print(
+        f"GDELT: búsquedas individuales con imagen coincidente para "
+        f"{len(mapped)}/{len(articles)} noticias."
+    )
     return mapped
 
 
@@ -1555,6 +1717,7 @@ def download_ranked_candidates(
     article: dict[str, Any],
     candidates: list[tuple[str, str, str, str]],
     api_key: str = "",
+    excluded_urls: set[str] | None = None,
 ) -> tuple[bytes, str, str, str, str] | None:
     """Download several top candidates, compare relevance, and embed the best match."""
     unique: dict[str, tuple[float, tuple[str, str, str, str]]] = {}
@@ -1562,7 +1725,9 @@ def download_ranked_candidates(
         if not candidate or len(candidate) < 4:
             continue
         image_url = candidate[0]
-        if not image_url:
+        if not image_url or (
+            excluded_urls and image_url_identity(image_url) in excluded_urls
+        ):
             continue
         score = image_candidate_relevance_score(article, candidate)
         current = unique.get(image_url)
@@ -1654,6 +1819,31 @@ def download_first_available(candidates: list[tuple[str, str, str, str]]) -> tup
     return None
 
 
+def article_image_cid(article: dict[str, Any], index: int = 1) -> str:
+    """Create a stable content ID from the story, not its position in a fallback subset."""
+    stable_id = article.get("id") or article.get("_image_article_index") or index
+    story_id = re.sub(
+        r"[^A-Za-z0-9_-]+", "-", str(stable_id)
+    ).strip("-")[:80] or str(index)
+    return f"news-image-{story_id}@resumen-diario"
+
+
+def store_article_image(
+    article: dict[str, Any],
+    result: tuple[bytes, str, str, str, str],
+    index: int,
+) -> None:
+    """Attach selected image metadata and stable MIME content ID to one story."""
+    data, subtype, image_url, image_source, credit = result
+    article["image_url"] = image_url
+    article["image_source"] = image_source
+    if credit:
+        article["image_credit"] = credit
+    article["_image_data"] = data
+    article["_image_subtype"] = subtype
+    article["_image_cid"] = article_image_cid(article, index)
+
+
 def embed_candidates(
     articles: list[dict[str, Any]],
     candidates: dict[int, list[tuple[str, str, str, str]]],
@@ -1673,16 +1863,52 @@ def embed_candidates(
             try:
                 result = future.result()
                 if result:
-                    data, subtype, image_url, image_source, credit = result
-                    article["image_url"] = image_url
-                    article["image_source"] = image_source
-                    if credit:
-                        article["image_credit"] = credit
-                    article["_image_data"] = data
-                    article["_image_subtype"] = subtype
-                    article["_image_cid"] = f"news-image-{index}@resumen-diario"
+                    store_article_image(article, result, index)
             except Exception as exc:
                 print(f"Error descargando fotografía ({type(exc).__name__}).")
+
+
+def ensure_unique_article_images(
+    articles: list[dict[str, Any]],
+    candidates: dict[int, list[tuple[str, str, str, str]]],
+    api_key: str = "",
+) -> None:
+    """Prevent the same image URL/CID from illustrating more than one story."""
+    used_urls: set[str] = set()
+    for index, article in enumerate(articles, 1):
+        if not article.get("_image_data"):
+            continue
+        image_url = str(article.get("image_url") or "")
+        image_identity = image_url_identity(image_url)
+        if image_identity and image_identity not in used_urls:
+            used_urls.add(image_identity)
+            article["_image_cid"] = article_image_cid(article, index)
+            continue
+
+        print(
+            f"Foto repetida detectada para {article.get('id', '')}; "
+            "buscando una alternativa exclusiva para esta noticia."
+        )
+        for key in (
+            "_image_data", "_image_subtype", "_image_cid", "image_url",
+            "image_source", "image_credit", "image_relevance_score",
+            "image_match_type",
+        ):
+            article.pop(key, None)
+
+        alternatives = candidates.get(id(article), [])
+        result = download_ranked_candidates(
+            article, alternatives, api_key, excluded_urls=used_urls
+        )
+        result_identity = image_url_identity(result[2]) if result else ""
+        if result and result_identity and result_identity not in used_urls:
+            store_article_image(article, result, index)
+            used_urls.add(result_identity)
+        else:
+            print(
+                f"Sin alternativa exclusiva para {article.get('id', '')}; "
+                "se deja esta noticia sin imagen para no repetir otra."
+            )
 
 
 
@@ -1696,7 +1922,8 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
     api_key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
     candidates: dict[int, list[tuple[str, str, str, str]]] = {id(a): [] for a in articles}
     ids = {id(article): str(article.get("id") or article.get("url")) for article in articles}
-    for article in articles:
+    for article_index, article in enumerate(articles, 1):
+        article["_image_article_index"] = article_index
         article["_image_candidate_descriptors"] = {}
 
     queries_by_id = generate_commons_queries(articles, api_key)
@@ -1762,13 +1989,10 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
     for article in missing:
         candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
         if candidate:
-            article["_image_candidate_descriptors"][candidate] = (
-                str(article.get("original_headline") or article.get("headline") or "")
-                + " image returned by a news article index"
-            )
-            candidates[id(article)] = [(
-                candidate, "gdelt", str(article.get("url") or ""), ""
-            )]
+            candidates[id(article)].append((
+                candidate, "gdelt",
+                str(article.get("image_source_url") or article.get("url") or ""), "",
+            ))
     embed_candidates(missing, candidates, api_key)
     print(f"Tras GDELT: {sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}.")
 
@@ -1780,9 +2004,9 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
             try:
                 url, credit = future.result()
                 if url:
-                    candidates[id(article)] = [(
+                    candidates[id(article)].append((
                         url, "openverse", str(article.get("url") or ""), credit
-                    )]
+                    ))
             except Exception:
                 pass
     embed_candidates(missing, candidates, api_key)
@@ -1798,9 +2022,9 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
                 try:
                     url = future.result()
                     if url:
-                        candidates[id(article)] = [(
+                        candidates[id(article)].append((
                             url, "brave", str(article.get("url") or ""), ""
-                        )]
+                        ))
                 except Exception:
                     pass
         embed_candidates(missing, candidates, api_key)
@@ -1811,7 +2035,8 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
     missing = [article for article in articles if not article.get("_image_data")]
     if missing:
         for article in missing:
-            candidates[id(article)] = []
+            # Preserve earlier story-specific candidates: the final uniqueness pass
+            # may need the second-best one if another article chose the same photo.
             theme_queries = fallback_visual_queries(article)
             article["_image_search_queries"] = theme_queries
             article["image_search_query"] = theme_queries[0] if theme_queries else ""
@@ -1842,6 +2067,8 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
             f"Tras Wikimedia Commons con consultas temáticas específicas: "
             f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
         )
+
+    ensure_unique_article_images(articles, candidates, api_key)
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     source_counts: dict[str, int] = {}
