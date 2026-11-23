@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
-from scripts.send_digest import collect_stories, prepare_article_images
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from send_digest import collect_stories, prepare_article_images
 
 
 def main() -> int:
