@@ -1,60 +1,69 @@
 # Resumen diario
 
-Automatización gratuita con GitHub Actions que recopila hasta cinco noticias recientes de tus intereses y las envía a tu correo cada día a las **08:00 (Europe/Berlin)**.
+Briefing de actualidad en español, generado automáticamente con GitHub Actions y enviado por Gmail cada día a las **08:00 (Europe/Berlin)**.
 
-## Qué incluye
+## Contenido
 
-- Mercados, inversión a largo plazo y fondos indexados.
-- Inteligencia artificial y tecnología.
-- Ingeniería del software, desarrollo web y prácticas de 2027.
-- IA aplicada a EEG y epilepsia.
-- Actualidad de España y Alemania.
-- Ajedrez y aprendizaje del ruso.
-- Hasta cinco noticias con titular, fuente, fecha, extracto RSS y enlace.
+El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin un número máximo fijo de noticias. La selección es flexible: solo se incluyen noticias que aporten valor y no se rellenan secciones artificialmente.
 
-**Transparencia:** esta versión no utiliza API de IA ni genera análisis editorial. Selecciona noticias recientes y presenta los extractos disponibles en los feeds RSS.
+1. **Economía y geopolítica** (prioridad principal): economía mundial, mercados, bancos centrales, empresas, conflictos, sanciones, energía, materias primas, bonos y divisas.
+2. **España y Gipuzkoa**: política, economía, sociedad, País Vasco, Gipuzkoa y Donostia.
+3. **Cultura, sociedad y descubrimientos**: historia, arqueología, patrimonio, libros, educación, medioambiente y descubrimientos.
+4. **Ciencia, investigación y tecnología**: más peso para ciencia e investigación que para tecnología; neurociencia, cerebro, epilepsia, EEG, medicina, biología, genética, física, espacio e IA científica.
 
-## Configurar Gmail SMTP
+Cada noticia incluye titular, resumen de 3–5 frases, por qué importa, fuente y enlace. No se incluyen ofertas de empleo ni prácticas.
 
-El repositorio nunca contiene contraseñas. Debes guardar los siguientes secretos en:
-https://github.com/Ivangb-626/resumen-diario/settings/secrets/actions
+Al final se añade un seguimiento indicativo de S&P 500, Nasdaq, Ibex 35, Euro Stoxx 50, Bitcoin, oro, petróleo WTI y EUR/USD, con la variación frente al cierre anterior disponible.
 
-1. `GMAIL_ADDRESS`: dirección de la cuenta Gmail que enviará el mensaje (remitente).
-2. `GMAIL_APP_PASSWORD`: contraseña de aplicación de Google de 16 caracteres.
-3. `GMAIL_RECIPIENT` (opcional): dirección que recibirá el correo. Si no se crea, se enviará a `GMAIL_ADDRESS`.
+## Cómo funciona
 
-### Crear una contraseña de aplicación
+- Google News RSS aporta candidatos de distintas consultas en español e inglés.
+- El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
+- Gemini clasifica los candidatos por relevancia y redacta el resumen editorial usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
+- Los datos de mercado se consultan desde Yahoo Finance.
+- El correo se envía por Gmail SMTP.
 
-Google exige que la verificación en dos pasos esté activada. Si no aparece la opción, Google indica que puede deberse a:
-- Verificación en dos pasos configurada solo con llaves de seguridad.
-- Cuenta de trabajo, universidad o gestionada por una organización.
-- Protección Avanzada activada.
+**Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
 
-Ayuda oficial:
-https://support.google.com/accounts/answer/185833
+## Configuración de secretos
 
-Página de contraseñas de aplicación:
-https://myaccount.google.com/apppasswords
+En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-626/resumen-diario/settings/secrets/actions), configura:
 
-No desactives Protección Avanzada ni rebajes las opciones de seguridad de una cuenta administrada solo para habilitar SMTP. Si tu cuenta habitual no admite contraseñas de aplicación, una alternativa es usar otra cuenta Gmail personal elegible como remitente y fijar tu dirección habitual en `GMAIL_RECIPIENT`.
+| Secreto | Obligatorio | Uso |
+|---|---|---|
+| `GMAIL_ADDRESS` | Sí | Cuenta Gmail remitente |
+| `GMAIL_APP_PASSWORD` | Sí | Contraseña de aplicación de Gmail |
+| `GMAIL_RECIPIENT` | No | Destinatario; si falta, se usa GMAIL_ADDRESS |
+| `GEMINI_API_KEY` | Recomendado | Clave de Gemini para selección y análisis editorial |
 
-Genera una contraseña específica para este proyecto, no uses tu contraseña normal de Google. Guarda el código de 16 caracteres directamente como secreto `GMAIL_APP_PASSWORD`; no lo pegues en el chat ni lo subas al repositorio.
+### Obtener GEMINI_API_KEY
 
-El envío se realiza por SMTP SSL a `smtp.gmail.com:465`. La dirección de remitente debe ser la cuenta que generó la contraseña de aplicación.
+1. Abre [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Crea una API key para Gemini.
+3. Añádela en GitHub como secreto llamado exactamente `GEMINI_API_KEY`.
 
-## Probar y activar
+El proyecto usa `gemini-3.8-flash-lite` por defecto. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Una vez añadidos los secretos:
-1. Abre https://github.com/Ivangb-626/resumen-diario/actions
+Si no configuras la clave, el correo seguirá enviándose en modo de respaldo con extractos RSS, pero sin selección editorial ni análisis de Gemini. Si la API falla temporalmente, también se utiliza ese modo de respaldo para no perder el envío.
+
+### Gmail SMTP
+
+El envío utiliza `smtp.gmail.com:465` mediante SSL. Crea una contraseña de aplicación específica y guárdala como `GMAIL_APP_PASSWORD`; no uses tu contraseña normal de Google ni la pegues en el repositorio.
+
+Ayuda oficial: https://support.google.com/accounts/answer/185833
+
+## Probar
+
+1. Abre [GitHub Actions](https://github.com/Ivangb-626/resumen-diario/actions).
 2. Selecciona **Resumen diario**.
-3. Pulsa **Run workflow** para una prueba inmediata.
-4. Comprueba que el trabajo termina en verde y llega el correo.
+3. Pulsa **Run workflow**.
+4. Comprueba los logs y el correo recibido.
 
-Después, GitHub Actions intentará ejecutarlo cada día a las 08:00, hora de Alemania. GitHub puede retrasar ocasionalmente los trabajos programados y los repositorios públicos pueden tener los schedules desactivados tras 60 días sin actividad del repositorio.
+El workflow se ejecuta diariamente a las 08:00, hora de Alemania. GitHub puede retrasar ocasionalmente los trabajos programados.
 
-## Coste y privacidad
+## Privacidad y costes
 
-El repositorio es público. El código y los titulares que aparezcan en los logs pueden ser visibles públicamente. Las contraseñas se guardan como secretos de GitHub y no se imprimen en los logs. No cambies la visibilidad del repositorio sin revisar antes las condiciones de facturación de Actions para repositorios privados.
-
-
-La gestión de tareas personales se ha trasladado al repositorio privado [pendientes-personales](https://github.com/Ivangb-626/pendientes-personales).
+- Las claves se almacenan en GitHub Actions Secrets, nunca en el código.
+- GitHub Actions utiliza el runner alojado por GitHub.
+- La API de Gemini tiene límites y condiciones de uso que pueden cambiar. La modalidad gratuita no equivale a una garantía de disponibilidad ilimitada ni de privacidad de nivel de pago.
+- No se utiliza Google Search Grounding ni se activa facturación automáticamente desde este repositorio.
