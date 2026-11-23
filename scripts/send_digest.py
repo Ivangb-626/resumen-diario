@@ -566,7 +566,9 @@ def collect_market_movers(limit: int = 5) -> tuple[list[dict[str, Any]], list[di
             if quote:
                 values.append({"name": name, "symbol": symbol, **quote})
     values.sort(key=lambda item: item["change_pct"], reverse=True)
-    return values[:limit], list(reversed(values[-limit:]))
+    gainers = [item for item in values if item["change_pct"] > 0][:limit]
+    losers = [item for item in reversed(values) if item["change_pct"] < 0][:limit]
+    return gainers, losers
 
 
 def fmt_number(value: float, currency: str) -> str:
