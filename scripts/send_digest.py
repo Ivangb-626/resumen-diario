@@ -283,6 +283,10 @@ CANDIDATOS:
         articles.append(item)
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
     articles.sort(key=lambda a: (order.get(a.get("section"), 99), a.get("published", "")), reverse=False)
+    # Keep the agreed section order and show the newest stories first inside each section.
+    articles.sort(key=lambda a: order.get(a.get("section"), 99))
+    articles.sort(key=lambda a: a.get("published", ""), reverse=True)
+    articles.sort(key=lambda a: order.get(a.get("section"), 99))
     return {"articles": articles}
 
 
