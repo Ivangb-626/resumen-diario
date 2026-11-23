@@ -201,5 +201,32 @@ class ArticleImageTests(unittest.TestCase):
         sleep.assert_called_once()
 
 
+    def test_16_email_contains_inline_image_attachment_and_cid(self):
+        article = {
+            "id": "N001",
+            "section": "Economía y geopolítica",
+            "headline": "Prueba de imagen en el correo",
+            "summary": "Resumen de prueba.",
+            "why_it_matters": "Comprobar la incrustación MIME.",
+            "source_name": "Fuente de prueba",
+            "url": "https://publisher.example/story",
+            "published": "2026-11-23T12:00:00+00:00",
+            "_image_data": b"\xff\xd8\xff\xe0fake-jpeg-bytes",
+            "_image_subtype": "jpeg",
+            "_image_cid": "news-image-1@resumen-diario",
+        }
+        message = digest.build_email(
+            {"articles": [article]}, [], [], [], ai_used=True
+        )
+        parts = list(message.walk())
+        html_part = next(part for part in parts if part.get_content_type() == "text/html")
+        self.assertIn("cid:news-image-1@resumen-diario", html_part.get_content())
+        self.assertTrue(any(
+            part.get_content_type() == "image/jpeg"
+            and part["Content-ID"] == "<news-image-1@resumen-diario>"
+            for part in parts
+        ))
+
+
 if __name__ == "__main__":
     unittest.main()
