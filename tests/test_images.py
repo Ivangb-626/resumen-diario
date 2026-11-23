@@ -131,7 +131,14 @@ class ArticleImageTests(unittest.TestCase):
 
     def test_12_webp_is_converted_to_email_safe_jpeg(self):
         buffer = io.BytesIO()
-        Image.new("RGB", (32, 24), "navy").save(buffer, format="WEBP")
+        from PIL import ImageDraw
+        image = Image.new("RGB", (500, 350), "white")
+        draw = ImageDraw.Draw(image)
+        for index in range(25):
+            x0 = index * 20
+            draw.rectangle((x0, 0, x0 + 19, 349),
+                           fill=((index * 37) % 255, (index * 71) % 255, (index * 113) % 255))
+        image.save(buffer, format="WEBP")
         response = FakeResponse(buffer.getvalue(), "image/webp",
                                 "https://cdn.example/image.webp")
         with patch.object(digest.urllib.request, "urlopen", return_value=response):
@@ -226,6 +233,107 @@ class ArticleImageTests(unittest.TestCase):
             and part["Content-ID"] == "<news-image-1@resumen-diario>"
             for part in parts
         ))
+
+
+    def test_17_blank_white_image_is_rejected_as_empty(self):
+        buffer = io.BytesIO()
+        Image.new("RGB", (1200, 675), "white").save(buffer, format="JPEG", quality=90)
+        response = FakeResponse(buffer.getvalue(), "image/jpeg",
+                                "https://cdn.example/blank.jpg")
+        with patch.object(digest.urllib.request, "urlopen", return_value=response):
+            result = digest.download_inline_image("https://cdn.example/blank.jpg")
+        self.assertIsNone(result)
+
+    def test_18_realistic_varied_image_passes_visual_quality_check(self):
+        from PIL import ImageDraw
+        image = Image.new("RGB", (900, 600), "white")
+        draw = ImageDraw.Draw(image)
+        for y in range(0, 600, 20):
+            for x in range(0, 900, 20):
+                draw.rectangle(
+                    (x, y, x + 19, y + 19),
+                    fill=((x * 7 + y) % 256, (y * 5 + x // 2) % 256, (x + y * 3) % 256),
+                )
+        valid, reason = digest.inspect_photo_quality(image)
+        self.assertTrue(valid, reason)
+
+    def test_19_gemini_image_queries_replace_long_headlines(self):
+        article = {
+            "id": "N019",
+            "headline": "La Unión Europea abre un procedimiento contra España por incumplir la normativa pesquera",
+            "original_headline": "EU launches infringement action against Spain over fisheries rules",
+            "summary": "The Commission cites failures in fisheries controls.",
+            "section": "España y Gipuzkoa",
+        }
+        answer = json.dumps({
+            "queries": [{
+                "id": "N019",
+                "queries": ["Spain fishing fleet port inspections", "European Commission fisheries Spain"],
+            }]
+        })
+        with patch.object(digest, "gemini_request", return_value=answer):
+            queries = digest.generate_commons_queries([article], "test-key")
+        self.assertEqual(
+            queries["N019"][0],
+            "Spain fishing fleet port inspections",
+        )
+
+    def test_20_commons_candidates_require_topic_overlap_and_photo_dimensions(self):
+        payload = {
+            "query": {
+                "pages": {
+                    "1": {
+                        "title": "File:Spanish fishing boats in Vigo.jpg",
+                        "imageinfo": [{
+                            "mime": "image/jpeg",
+                            "width": 1800,
+                            "height": 1200,
+                            "thumburl": "https://upload.wikimedia.org/fishing-vigo.jpg",
+                            "extmetadata": {
+                                "ObjectName": {"value": "Fishing boats in Vigo"},
+                                "ImageDescription": {"value": "Spanish fishing fleet in Vigo port"},
+                                "Artist": {"value": "Photo author"},
+                                "LicenseShortName": {"value": "CC BY-SA"},
+                            },
+                        }],
+                    },
+                    "2": {
+                        "title": "File:Football match.jpg",
+                        "imageinfo": [{
+                            "mime": "image/jpeg",
+                            "width": 1800,
+                            "height": 1200,
+                            "thumburl": "https://upload.wikimedia.org/football.jpg",
+                            "extmetadata": {
+                                "ObjectName": {"value": "Football match"},
+                                "ImageDescription": {"value": "Football match in a stadium"},
+                            },
+                        }],
+                    },
+                }
+            }
+        }
+        response = FakeResponse(json.dumps(payload).encode(), "application/json")
+        article = {
+            "id": "N020",
+            "headline": "España refuerza los controles sobre su flota pesquera",
+            "original_headline": "Spain strengthens controls on its fishing fleet",
+        }
+        with patch.object(digest.urllib.request, "urlopen", return_value=response):
+            candidates = digest.fetch_commons_candidates(
+                article, ["Spain fishing fleet Vigo port"]
+            )
+        self.assertEqual(len(candidates), 1)
+        self.assertIn("fishing-vigo.jpg", candidates[0][0])
+        self.assertEqual(candidates[0][1], "commons")
+
+    def test_21_fallback_query_removes_editorial_filler(self):
+        query = digest.fallback_image_query({
+            "original_headline": "The EU launches action against Spain over fisheries rules and fraud prevention"
+        })
+        self.assertIn("Spain", query)
+        self.assertIn("fisheries", query)
+        self.assertNotIn("against", query.split())
 
 
 if __name__ == "__main__":
