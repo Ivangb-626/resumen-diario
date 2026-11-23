@@ -14,7 +14,6 @@ import re
 import smtplib
 import ssl
 import sys
-import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -191,20 +190,21 @@ def collect_stories() -> list[Story]:
 
 def build_email(stories: list[Story]) -> EmailMessage:
     now = datetime.now(BERLIN)
-    date_label = now.strftime("%A, %d de %B de %Y")
-    date_label = date_label.capitalize()
+    days = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    months = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    date_label = f"{days[now.weekday()]}, {now.day} de {months[now.month - 1]} de {now.year}"
 
     msg = EmailMessage()
     msg["Subject"] = f"Tu resumen diario — {now.strftime('%d/%m/%Y')}"
     msg.set_content(
-        "Tu resumen diario\\n"
-        f"{date_label}\\n\\n"
-        + "\\n\\n".join(
-            f"{i}. {s.title}\\n{s.topic} · {s.source}\\n"
-            f"{s.summary or 'Lee la noticia completa en la fuente original.'}\\n{s.link}"
+        "Tu resumen diario\n"
+        f"{date_label}\n\n"
+        + "\n\n".join(
+            f"{i}. {s.title}\n{s.topic} · {s.source}\n"
+            f"{s.summary or 'Lee la noticia completa en la fuente original.'}\n{s.link}"
             for i, s in enumerate(stories, 1)
         )
-        + "\\n\\nSelección automática de titulares y extractos de fuentes RSS. "
+        + "\n\nSelección automática de titulares y extractos de fuentes RSS. "
           "No se ha generado análisis editorial mediante IA."
     )
 
@@ -275,7 +275,7 @@ def main() -> int:
 
     message = build_email(stories)
     send_email(message, address, app_password)
-    print(f"Correo enviado correctamente a {address}.")
+    print("Correo enviado correctamente.")
     return 0
 
 
