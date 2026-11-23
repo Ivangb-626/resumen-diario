@@ -14,6 +14,7 @@ import os
 import re
 import smtplib
 import ssl
+import threading
 import sys
 import time
 import urllib.parse
@@ -33,6 +34,7 @@ MAX_AGE = timedelta(hours=24)
 USER_AGENT = "resumen-diario/2.0 (+https://github.com/Ivangb-626/resumen-diario)"
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
 _GEMINI_VISION_DISABLED = False
+_GEMINI_VISION_LOCK = threading.Lock()
 
 GEMINI_ENDPOINT = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -378,8 +380,7 @@ def gemini_request(prompt: str, api_key: str, retry_delays: tuple[int, ...] = (5
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
-    # Temporary capacity errors (especially HTTP 503) are common; retry with backoff.
-    retry_delays = (5, 15, 30)
+    # Respect the caller's retry budget; image-query generation uses a shorter one.
     for attempt in range(len(retry_delays) + 1):
         try:
             with urllib.request.urlopen(request, timeout=90) as response:
@@ -993,16 +994,17 @@ def generate_commons_queries(
     prompt = f"""
 You prepare search queries for real photographs on Wikimedia Commons.
 For every news story below, create exactly 2 short, concrete image-search phrases.
-The first must target the distinctive person/place/institution/event. The second
-must target a plausible visible scene or physical subject (for example server racks,
-fishing boats in port, a parliamentary chamber, a railway track or a laboratory).
-Use named people, places, institutions, objects, events and visible scenes from
-the story. Prefer phrases likely to appear in a Commons file title or description.
-Translate abstract policy/economic language into the real-world subject that a
-photograph would depict, without inventing a scene or adding unrelated context.
-Keep important proper names. Queries should be 4-9 words, concise, and can be in
-English because Commons metadata is often in English. Do not return generic words
-such as "news", "business", "politics", "technology" or "people" on their own.
+Query 1 must target the exact distinctive person, place, institution, company or event.
+Preserve proper names and locations from the story; do not replace them with a generic
+group or setting. Query 2 must describe a concrete visible object or scene that is
+explicitly supported by the headline or summary. Do not invent a person, activity,
+building, meeting, protest or location that the story does not mention.
+Avoid stock-photo stereotypes such as elderly people in a park, generic office meetings,
+generic politicians, city skylines or trading floors unless that is genuinely the subject.
+Translate abstract policy/economic language into the closest real-world subject without
+inventing context. Queries should be 4-9 words, concise, and can be in English because
+Commons metadata is often in English. Do not use generic words such as "news",
+"business", "politics", "technology" or "people" on their own.
 Return JSON only with exactly two distinct queries per story:
 {{"queries":[{{"id":"N001","queries":["specific phrase one","specific phrase two"]}}]}}
 
@@ -1410,9 +1412,9 @@ def gemini_visual_rank(
     downloaded: list[tuple[tuple[str, str, str, str], bytes, float]],
     api_key: str,
 ) -> dict[int, dict[str, Any]]:
-    """Ask the configured multimodal Gemini model whether each photo depicts this story."""
+    """Review finalist photos with Gemini, serializing calls and retrying temporary outages."""
     global _GEMINI_VISION_DISABLED
-    if not api_key or not downloaded or _GEMINI_VISION_DISABLED:
+    if not api_key or not downloaded:
         return {}
 
     headline = str(article.get("headline") or article.get("original_headline") or "")
@@ -1431,6 +1433,7 @@ def gemini_visual_rank(
             "No supongas identidades ni lugares que no puedas reconocer en la imagen. "
             "Sé estricto: una foto genérica de políticos, edificios, ordenadores o mercados "
             "no es direct ni related solo por pertenecer a esa categoría. "
+            "Si dudas entre related e illustrative, elige illustrative. "
             "Devuelve JSON con esta estructura: "
             '{"images":[{"index":1,"relevance":90,"relation":"direct","reason":"..."}]}'
         )
@@ -1458,47 +1461,86 @@ def gemini_visual_rank(
         headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=65) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        raw = result["candidates"][0]["content"]["parts"][0]["text"]
-        parsed = json.loads(raw)
-        ranked: dict[int, dict[str, Any]] = {}
-        for item in parsed.get("images", []):
-            try:
-                index = int(item.get("index"))
-                relevance = max(0, min(100, int(float(item.get("relevance", 0)))))
-            except (TypeError, ValueError):
-                continue
-            relation = str(item.get("relation") or "unrelated").strip().lower()
-            aliases = {
-                "directa": "direct", "directo": "direct",
-                "relacionada": "related", "relacionado": "related",
-                "ilustrativa": "illustrative", "ilustrativo": "illustrative",
-                "no relacionada": "unrelated", "no relacionado": "unrelated",
-            }
-            relation = aliases.get(relation, relation)
-            if relation not in {"direct", "related", "illustrative", "unrelated"}:
-                relation = "unrelated"
-            ranked[index] = {
-                "relevance": relevance, "relation": relation,
-                "reason": str(item.get("reason") or "")[:180],
-            }
-        for index, value in ranked.items():
-            print(
-                f"Gemini visión {article.get('id', '')} candidata {index}: "
-                f"{value['relation']} ({value['relevance']}/100)."
-            )
-        return ranked
-    except HTTPError as exc:
-        _GEMINI_VISION_DISABLED = True
-        print(f"Gemini visión no disponible (HTTP {exc.code}); se usará la puntuación local.")
-        return {}
-    except Exception as exc:
-        _GEMINI_VISION_DISABLED = True
-        print(f"Gemini visión no disponible ({type(exc).__name__}); se usará la puntuación local.")
-        return {}
 
+    # Image review used to fan out several simultaneous requests, which made HTTP 503
+    # responses more likely. Serialize requests and retry temporary capacity/rate errors.
+    retry_delays = (5, 15)
+    with _GEMINI_VISION_LOCK:
+        if _GEMINI_VISION_DISABLED:
+            return {}
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=75) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                raw = result["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = json.loads(raw)
+                ranked: dict[int, dict[str, Any]] = {}
+                for item in parsed.get("images", []):
+                    try:
+                        index = int(item.get("index"))
+                        relevance = max(0, min(100, int(float(item.get("relevance", 0)))))
+                    except (TypeError, ValueError):
+                        continue
+                    relation = str(item.get("relation") or "unrelated").strip().lower()
+                    aliases = {
+                        "directa": "direct", "directo": "direct",
+                        "relacionada": "related", "relacionado": "related",
+                        "ilustrativa": "illustrative", "ilustrativo": "illustrative",
+                        "no relacionada": "unrelated", "no relacionado": "unrelated",
+                    }
+                    relation = aliases.get(relation, relation)
+                    if relation not in {"direct", "related", "illustrative", "unrelated"}:
+                        relation = "unrelated"
+                    ranked[index] = {
+                        "relevance": relevance, "relation": relation,
+                        "reason": str(item.get("reason") or "")[:180],
+                    }
+                for index, value in ranked.items():
+                    print(
+                        f"Gemini visión {article.get('id', '')} candidata {index}: "
+                        f"{value['relation']} ({value['relevance']}/100)."
+                    )
+                return ranked
+            except HTTPError as exc:
+                if exc.code in {429, 500, 502, 503, 504} and attempt < len(retry_delays):
+                    delay = retry_delays[attempt]
+                    print(
+                        f"Gemini visión devuelve HTTP {exc.code}; reintento "
+                        f"{attempt + 1}/{len(retry_delays)} en {delay} segundos…",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                _GEMINI_VISION_DISABLED = True
+                print(
+                    f"Gemini visión no disponible (HTTP {exc.code}); "
+                    "se usará la puntuación local para el resto de este resumen."
+                )
+                return {}
+            except (TimeoutError, OSError) as exc:
+                if attempt < len(retry_delays):
+                    delay = retry_delays[attempt]
+                    print(
+                        f"Gemini visión sin respuesta ({type(exc).__name__}); "
+                        f"reintento {attempt + 1}/{len(retry_delays)} en {delay} segundos…",
+                        file=sys.stderr,
+                    )
+                    time.sleep(delay)
+                    continue
+                _GEMINI_VISION_DISABLED = True
+                print(
+                    f"Gemini visión agotó los reintentos ({type(exc).__name__}); "
+                    "se usará la puntuación local para el resto de este resumen."
+                )
+                return {}
+            except Exception as exc:
+                _GEMINI_VISION_DISABLED = True
+                print(
+                    f"Gemini visión no disponible ({type(exc).__name__}); "
+                    "se usará la puntuación local para el resto de este resumen."
+                )
+                return {}
+    return {}
 
 def download_ranked_candidates(
     article: dict[str, Any],
@@ -1538,7 +1580,7 @@ def download_ranked_candidates(
         return None
 
     downloaded: list[tuple[tuple[str, str, str, str], bytes, float]] = []
-    for heuristic_score, candidate in ranked[:4]:
+    for heuristic_score, candidate in ranked[:6]:
         if heuristic_score < 0.12:
             continue
         image_url, _source, referer, _credit = candidate[:4]
@@ -1558,16 +1600,16 @@ def download_ranked_candidates(
                 continue
             relation = visual["relation"]
             relevance = visual["relevance"]
-            if relation not in {"direct", "related"} or relevance < 55:
+            if relation not in {"direct", "related"} or relevance < 60:
                 continue
-            combined = 0.32 * heuristic_score + 0.68 * (relevance / 100.0)
+            combined = 0.25 * heuristic_score + 0.75 * (relevance / 100.0)
             url, source, _referer, credit = candidate[:4]
             choices.append((combined, (data, "jpeg", url, source, credit), relation))
     else:
         # During a Gemini outage, choose the strongest metadata match, not the first
         # downloadable URL. Exact publisher/RSS provenance remains a useful signal.
         for candidate, data, heuristic_score in downloaded:
-            if heuristic_score >= 0.32:
+            if heuristic_score >= 0.36:
                 url, source, _referer, credit = candidate[:4]
                 choices.append((
                     heuristic_score, (data, "jpeg", url, source, credit), "metadata"
