@@ -405,6 +405,7 @@ CANDIDATOS:
         item["source_name"] = source.source
         item["published"] = source.published.isoformat()
         item["image_url"] = source.image_url
+        item["rss_image_url"] = source.image_url
         item["original_headline"] = source.title
         seen.add(sid)
         articles.append(item)
@@ -453,6 +454,7 @@ def fallback_selection(stories: list[Story]) -> dict[str, Any]:
             "url": story.link,
             "published": story.published.isoformat(),
             "image_url": story.image_url,
+            "rss_image_url": story.image_url,
             "original_headline": story.title,
         })
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
@@ -647,45 +649,57 @@ def download_inline_image(image_url: str) -> tuple[bytes, str] | None:
         return None
 
 
+def download_first_available(candidates: list[tuple[str, str]]) -> tuple[bytes, str, str, str] | None:
+    """Try each candidate in priority order and return the first embeddable image."""
+    seen: set[str] = set()
+    for image_url, source in candidates:
+        if not image_url or image_url in seen:
+            continue
+        seen.add(image_url)
+        result = download_inline_image(image_url)
+        if result:
+            data, subtype = result
+            return data, subtype, image_url, source
+    return None
+
+
 def prepare_article_images(editorial: dict[str, Any]) -> None:
-    """Use several article-linked sources, in order, and avoid generic/unrelated photos."""
+    """Collect several article-linked sources and try them until one embeds successfully."""
     articles = editorial.get("articles", [])
-    # Tier 1: publisher's own JSON-LD / Open Graph article image.
+    candidates: dict[int, list[tuple[str, str]]] = {
+        id(article): [] for article in articles
+    }
+
+    # Tier 1: publisher's own JSON-LD / Open Graph metadata.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(fetch_article_image, article): article for article in articles}
         for future in as_completed(futures):
             article = futures[future]
             try:
                 image_url, publisher_url = future.result()
-                article["image_url"] = image_url
                 if image_url:
+                    candidates[id(article)].append((image_url, "publisher"))
                     article["image_source_page"] = publisher_url
-                    article["image_source"] = "publisher"
-            except Exception:
-                article["image_url"] = ""
+            except Exception as exc:
+                print(f"Error leyendo imagen del artículo: {type(exc).__name__}.")
 
     # Tier 2: original RSS media:content / media:thumbnail / enclosure.
     for article in articles:
-        if not article.get("image_url"):
-            rss_candidate = usable_image_url(str(article.get("rss_image_url") or article.get("image_url") or ""))
-            if rss_candidate and not image_url_is_generic(rss_candidate):
-                article["image_url"] = rss_candidate
-                article["image_source"] = "rss"
+        rss_candidate = usable_image_url(str(article.get("rss_image_url") or ""))
+        if rss_candidate and not image_url_is_generic(rss_candidate):
+            candidates[id(article)].append((rss_candidate, "rss"))
 
-    # Tier 3: GDELT socialimage, matched against the exact original headline.
+    # Tier 3: GDELT socialimage matched against the original headline.
     gdelt_map = fetch_gdelt_images(articles)
     for article in articles:
-        if not article.get("image_url"):
-            candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
-            if candidate:
-                article["image_url"] = candidate
-                article["image_source"] = "gdelt"
+        candidate = gdelt_map.get(str(article.get("id") or article.get("url")), "")
+        if candidate:
+            candidates[id(article)].append((candidate, "gdelt"))
 
-    # Tier 4: optional Brave Image Search. Add BRAVE_SEARCH_API_KEY to GitHub
-    # Actions secrets to enable it; strict headline matching is applied.
+    # Tier 4: optional Brave Image Search; enabled with BRAVE_SEARCH_API_KEY.
     brave_key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
     if brave_key:
-        missing = [a for a in articles if not a.get("image_url")]
+        missing = [a for a in articles if not candidates[id(a)]]
         with ThreadPoolExecutor(max_workers=3) as pool:
             futures = {pool.submit(fetch_brave_image, article, brave_key): article for article in missing}
             for future in as_completed(futures):
@@ -693,34 +707,35 @@ def prepare_article_images(editorial: dict[str, Any]) -> None:
                 try:
                     candidate = future.result()
                     if candidate:
-                        article["image_url"] = candidate
-                        article["image_source"] = "brave"
+                        candidates[id(article)].append((candidate, "brave"))
                 except Exception:
                     pass
     else:
         print("Brave Image Search omitido: falta el secreto opcional BRAVE_SEARCH_API_KEY.")
 
-    # Download candidates; failed formats/hosts fall through to the next available
-    # source in later runs rather than embedding broken or unsupported content.
+    # Try every candidate in order. A broken publisher URL must not prevent trying
+    # the RSS or GDELT alternative for the same story.
     with ThreadPoolExecutor(max_workers=5) as pool:
         futures = {
-            pool.submit(download_inline_image, str(article.get("image_url", ""))): (index, article)
+            pool.submit(download_first_available, candidates[id(article)]): (index, article)
             for index, article in enumerate(articles, 1)
-            if article.get("image_url")
         }
         for future in as_completed(futures):
             index, article = futures[future]
             try:
                 result = future.result()
                 if result:
-                    data, subtype = result
+                    data, subtype, image_url, image_source = result
+                    article["image_url"] = image_url
+                    article["image_source"] = image_source
                     article["_image_data"] = data
                     article["_image_subtype"] = subtype
                     article["_image_cid"] = f"news-image-{index}@resumen-diario"
                 else:
                     article["image_url"] = ""
-            except Exception:
+            except Exception as exc:
                 article["image_url"] = ""
+                print(f"No se pudo incrustar imagen para una noticia ({type(exc).__name__}).")
 
     attached = sum(1 for article in articles if article.get("_image_data"))
     source_counts: dict[str, int] = {}
