@@ -160,22 +160,15 @@ class ArticleImageTests(unittest.TestCase):
         self.assertEqual(result[3], "rss")
 
 
-    def test_14_google_news_thumbnail_cdn_is_allowed(self):
-        page = (
-            b'<html><head><meta property="og:image" '
-            b'content="https://lh3.googleusercontent.com/news-image=w1200-h630">'
-            b'</head></html>'
-        )
-        with patch.object(digest.urllib.request, "urlopen",
-                          return_value=FakeResponse(page)):
-            urls, _ = digest.fetch_article_images({
+    def test_14_google_news_intermediate_page_is_not_used_as_publisher_image(self):
+        with patch.object(digest.urllib.request, "urlopen") as mocked:
+            urls, final_url = digest.fetch_article_images({
                 "url": "https://news.google.com/rss/articles/example",
                 "headline": "A current news story",
             })
-        self.assertIn(
-            "https://lh3.googleusercontent.com/news-image=w1200-h630",
-            urls,
-        )
+        self.assertEqual(urls, [])
+        self.assertEqual(final_url, "")
+        mocked.assert_not_called()
 
 
     def test_15_publisher_fetch_retries_http_429(self):
@@ -626,6 +619,33 @@ class ArticleImageTests(unittest.TestCase):
         )
         self.assertGreater(score, 0.2)
         self.assertLess(score, 0.6)
+
+
+
+    def test_33_google_news_image_extractor_uses_article_level_source_url(self):
+        page = (
+            b'<html><head><meta property="og:image" '
+            b'content="https://cdn.publisher.example/story/lead.jpg">'
+            b'</head></html>'
+        )
+        with patch.object(
+            digest.urllib.request, "urlopen",
+            return_value=FakeResponse(
+                page, url="https://publisher.example/news/story/123"
+            ),
+        ) as mocked:
+            urls, final_url = digest.fetch_article_images({
+                "url": "https://news.google.com/rss/articles/example",
+                "image_source_url": "https://publisher.example/news/story/123",
+                "headline": "A current news story",
+            })
+        self.assertEqual(final_url, "https://publisher.example/news/story/123")
+        self.assertIn("https://cdn.publisher.example/story/lead.jpg", urls)
+        requested = mocked.call_args.args[0]
+        self.assertEqual(
+            requested.full_url,
+            "https://publisher.example/news/story/123",
+        )
 
 
 
