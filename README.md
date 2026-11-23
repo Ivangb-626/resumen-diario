@@ -1,63 +1,8 @@
 # Resumen diario
 
-Proyecto gratuito para recopilar hasta cinco noticias recientes de tus intereses y enviarlas por correo cada mañana, incluso con el ordenador apagado.
+Automatización gratuita con GitHub Actions que recopila hasta cinco noticias recientes de tus intereses y las envía a tu correo cada día a las **08:00 (Europe/Berlin)**.
 
-## Cómo funciona
-
-- **Google Apps Script** ejecuta el resumen diariamente en la nube, aproximadamente entre las 08:00 y las 09:00 (Europe/Berlin).
-- **GitHub** conserva el código fuente.
-- **GitHub Actions + clasp** despliegan automáticamente en Apps Script cada cambio que se suba a `apps-script/`.
-- El envío se realiza desde la cuenta Google que autorizó el proyecto.
-- No se requiere contraseña de aplicación de Gmail ni API de IA de pago.
-
-## Conectar este repositorio al proyecto de Apps Script (una sola vez)
-
-El repositorio ya incluye `apps-script/.clasp.json`, configurado con el Script ID que has compartido. El Script ID identifica el proyecto, pero no es una contraseña.
-
-### 1. Habilitar la API de Apps Script
-
-Abre https://script.google.com/home/usersettings y activa **Google Apps Script API**.
-
-### 2. Autorizar clasp desde tu ordenador
-
-Necesitamos generar una credencial OAuth para que GitHub Actions pueda publicar en tu proyecto. Se hace una sola vez:
-
-1. Abre PowerShell en Windows.
-2. Comprueba si Node.js está instalado con `node --version`. Si no lo está, instálalo desde https://nodejs.org/ (versión LTS).
-3. Ejecuta:
-
-   `npx --yes @google/clasp login`
-
-4. Se abrirá el navegador. Accede con la misma cuenta Google propietaria del proyecto y concede el acceso solicitado.
-5. Cuando finalice, clasp habrá creado `%USERPROFILE%\.clasprc.json`.
-
-**Ese archivo contiene una credencial OAuth privada. No lo pegues en el chat, no lo subas al repositorio ni lo compartas con nadie.**
-
-### 3. Guardar la credencial como secreto de GitHub
-
-1. Abre https://github.com/Ivangb-626/resumen-diario/settings/secrets/actions
-2. Pulsa **New repository secret**.
-3. En **Name**, escribe exactamente `CLASPRC_JSON`.
-4. En **Secret**, pega el contenido completo del archivo `%USERPROFILE%\.clasprc.json`.
-   - Puedes abrirlo en el Bloc de notas con `notepad $HOME\.clasprc.json`.
-   - Copia todo el contenido JSON y pégalo directamente en el campo Secret de GitHub.
-   - No envíes ese contenido por ChatGPT.
-5. Guarda con **Add secret**.
-
-No necesitas crear el secreto `CLASP_JSON`: la configuración de proyecto ya está incluida en el repositorio.
-
-### 4. Ejecutar el primer despliegue
-
-1. Abre la pestaña Actions: https://github.com/Ivangb-626/resumen-diario/actions
-2. Selecciona **Deploy Google Apps Script**.
-3. Pulsa **Run workflow**.
-4. Comprueba que termina en verde.
-
-A partir de ahí, cuando ChatGPT modifique y guarde cualquier archivo dentro de `apps-script/` en la rama `main`, GitHub Actions subirá automáticamente los cambios al proyecto de Apps Script. No edites después el código manualmente en el editor de Apps Script: el repositorio será la fuente principal.
-
-**Importante:** `clasp push --force` reemplaza el contenido del proyecto remoto con los archivos del repositorio. Antes del primer despliegue, asegúrate de que el código que ya ejecutaste en Apps Script está representado en `apps-script/Code.gs` y `apps-script/appsscript.json`. El repositorio debe ser la fuente de verdad a partir de ese momento.
-
-## Temas del resumen
+## Qué incluye
 
 - Mercados, inversión a largo plazo y fondos indexados.
 - Inteligencia artificial y tecnología.
@@ -65,18 +10,48 @@ A partir de ahí, cuando ChatGPT modifique y guarde cualquier archivo dentro de 
 - IA aplicada a EEG y epilepsia.
 - Actualidad de España y Alemania.
 - Ajedrez y aprendizaje del ruso.
+- Hasta cinco noticias con titular, fuente, fecha, extracto RSS y enlace.
 
-El script selecciona titulares, extractos RSS, fuentes, fechas y enlaces. No llama a una API de IA y no inventa análisis.
+**Transparencia:** esta versión no utiliza API de IA ni genera análisis editorial. Selecciona noticias recientes y presenta los extractos disponibles en los feeds RSS.
 
-## Horario y límites
+## Configurar Gmail SMTP
 
-Apps Script usa la zona `Europe/Berlin` y crea un disparador a las 08:00. Google puede ejecutar el disparador en cualquier momento dentro de la franja 08:00–09:00; no garantiza el minuto exacto.
+El repositorio nunca contiene contraseñas. Debes guardar los siguientes secretos en:
+https://github.com/Ivangb-626/resumen-diario/settings/secrets/actions
 
-Apps Script tiene cuotas gratuitas y límites sujetos a cambios. Revisa:
-- https://developers.google.com/apps-script/guides/triggers/installable
-- https://developers.google.com/apps-script/guides/services/quotas
-- https://developers.google.com/apps-script/guides/clasp
+1. `GMAIL_ADDRESS`: dirección de la cuenta Gmail que enviará el mensaje (remitente).
+2. `GMAIL_APP_PASSWORD`: contraseña de aplicación de Google de 16 caracteres.
+3. `GMAIL_RECIPIENT` (opcional): dirección que recibirá el correo. Si no se crea, se enviará a `GMAIL_ADDRESS`.
 
-## Seguridad
+### Crear una contraseña de aplicación
 
-El repositorio es público. El código y el archivo `.clasp.json` (que contiene el Script ID, no credenciales) pueden ser visibles. La credencial OAuth se guarda únicamente en el secreto `CLASPRC_JSON`. Nunca subas `.clasprc.json`, tokens ni contraseñas al repositorio.
+Google exige que la verificación en dos pasos esté activada. Si no aparece la opción, Google indica que puede deberse a:
+- Verificación en dos pasos configurada solo con llaves de seguridad.
+- Cuenta de trabajo, universidad o gestionada por una organización.
+- Protección Avanzada activada.
+
+Ayuda oficial:
+https://support.google.com/accounts/answer/185833
+
+Página de contraseñas de aplicación:
+https://myaccount.google.com/apppasswords
+
+No desactives Protección Avanzada ni rebajes las opciones de seguridad de una cuenta administrada solo para habilitar SMTP. Si tu cuenta habitual no admite contraseñas de aplicación, una alternativa es usar otra cuenta Gmail personal elegible como remitente y fijar tu dirección habitual en `GMAIL_RECIPIENT`.
+
+Genera una contraseña específica para este proyecto, no uses tu contraseña normal de Google. Guarda el código de 16 caracteres directamente como secreto `GMAIL_APP_PASSWORD`; no lo pegues en el chat ni lo subas al repositorio.
+
+El envío se realiza por SMTP SSL a `smtp.gmail.com:465`. La dirección de remitente debe ser la cuenta que generó la contraseña de aplicación.
+
+## Probar y activar
+
+Una vez añadidos los secretos:
+1. Abre https://github.com/Ivangb-626/resumen-diario/actions
+2. Selecciona **Resumen diario**.
+3. Pulsa **Run workflow** para una prueba inmediata.
+4. Comprueba que el trabajo termina en verde y llega el correo.
+
+Después, GitHub Actions intentará ejecutarlo cada día a las 08:00, hora de Alemania. GitHub puede retrasar ocasionalmente los trabajos programados y los repositorios públicos pueden tener los schedules desactivados tras 60 días sin actividad del repositorio.
+
+## Coste y privacidad
+
+El repositorio es público. El código y los titulares que aparezcan en los logs pueden ser visibles públicamente. Las contraseñas se guardan como secretos de GitHub y no se imprimen en los logs. No cambies la visibilidad del repositorio sin revisar antes las condiciones de facturación de Actions para repositorios privados.
