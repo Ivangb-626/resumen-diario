@@ -177,5 +177,29 @@ class ArticleImageTests(unittest.TestCase):
         )
 
 
+    def test_15_publisher_fetch_retries_http_429(self):
+        from email.message import Message
+        from urllib.error import HTTPError
+
+        headers = Message()
+        headers["Retry-After"] = "0"
+        rate_limit = HTTPError(
+            "https://publisher.example/story", 429, "Too Many Requests", headers, None
+        )
+        page = b'<html><head><meta property="og:image" '
+        page += b'content="https://cdn.example/recovered.jpg"></head></html>'
+        with patch.object(
+            digest.urllib.request,
+            "urlopen",
+            side_effect=[rate_limit, FakeResponse(page)],
+        ), patch.object(digest.time, "sleep") as sleep:
+            urls, _ = digest.fetch_article_images({
+                "url": "https://publisher.example/story",
+                "headline": "Recovered article",
+            })
+        self.assertIn("https://cdn.example/recovered.jpg", urls)
+        sleep.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
