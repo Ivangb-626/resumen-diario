@@ -16,7 +16,7 @@ concurrency:
 jobs:
   enviar-resumen:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v4
@@ -26,9 +26,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Recopilar noticias y enviar correo
+      - name: Recopilar, analizar noticias y enviar correo
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_RECIPIENT: ${{ secrets.GMAIL_RECIPIENT }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: gemini-3.8-flash-lite
         run: python scripts/send_digest.py
