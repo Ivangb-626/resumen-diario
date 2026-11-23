@@ -1296,29 +1296,35 @@ def prepare_article_images(editorial: dict[str, Any], api_key: str = "") -> None
             f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
         )
 
-    # Absolute last fallback: the user prefers an actual, non-empty photo over
-    # an empty image slot. Use a genuine Commons cityscape photo and label it as
-    # a general illustration rather than implying it depicts the specific story.
+    # Absolute last fallback: perform one Commons lookup for a small set of
+    # genuine, non-empty city photographs, then reuse those only for unresolved
+    # stories. This avoids eight or more identical API calls and rate-limit bursts.
     missing = [article for article in articles if not article.get("_image_data")]
     if missing:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            futures = {
-                pool.submit(fetch_commons_candidates, article, ["city skyline"]): article
-                for article in missing
-            }
-            for future in as_completed(futures):
-                article = futures[future]
-                try:
-                    for image_url, _source, landing, credit in future.result():
-                        candidates[id(article)].append((
-                            image_url,
-                            "commons-generic-illustrative",
-                            landing,
-                            (credit + " · imagen ilustrativa general").strip(" ·"),
-                        ))
-                except Exception as exc:
-                    print(f"Commons genérico no disponible ({type(exc).__name__}).")
-        embed_candidates(missing, candidates)
+        generic_record = {
+            "id": "COMMONS-GENERIC-PHOTO-POOL",
+            "headline": "City skyline",
+            "original_headline": "City skyline",
+        }
+        generic_results = fetch_commons_candidates(
+            generic_record,
+            ["city skyline", "urban landscape", "street photography"],
+        )
+        generic_candidates = [
+            (
+                image_url,
+                "commons-generic-illustrative",
+                landing,
+                (credit + " · imagen ilustrativa general").strip(" ·"),
+            )
+            for image_url, _source, landing, credit in generic_results
+        ]
+        if generic_candidates:
+            for article in missing:
+                candidates[id(article)] = list(generic_candidates)
+            embed_candidates(missing, candidates)
+        else:
+            print("Commons no encontró fotografías generales para el último respaldo.")
         print(
             f"Tras Wikimedia Commons genérico: "
             f"{sum(bool(a.get('_image_data')) for a in articles)}/{len(articles)}."
