@@ -54,6 +54,10 @@ def main() -> int:
         score = article.get("image_relevance_score")
         source = str(article.get("image_source") or "desconocido")
         credit = str(article.get("image_credit") or "")
+        descriptor = str(article.get("_image_candidate_descriptors", {}).get(
+            str(article.get("image_url") or ""), ""
+        ))
+        queries = article.get("_image_search_queries") or []
         rows.append(
             "<article><h2>" + html.escape(str(article["headline"])) + "</h2>"
             + f"<img src='{html.escape(filename, quote=True)}' alt='Fotografía seleccionada' "
@@ -62,6 +66,8 @@ def main() -> int:
             + " · <b>Fuente:</b> " + html.escape(source)
             + (f" · <b>Puntuación:</b> {float(score):.2f}" if score is not None else "")
             + "</p><p>" + html.escape(credit) + "</p>"
+            + ("<p><b>Descripción del archivo:</b> " + html.escape(descriptor) + "</p>" if descriptor else "")
+            + ("<p><b>Consultas:</b> " + html.escape(" · ".join(str(q) for q in queries)) + "</p>" if queries else "")
             + "<p><a href='" + html.escape(str(article.get("url") or ""), quote=True)
             + "'>Abrir noticia original</a></p></article>"
         )
