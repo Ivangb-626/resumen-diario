@@ -435,7 +435,12 @@ def collect_stories() -> list[Story]:
         story.id = f"N{index:03d}"
     if not stories:
         detail = "; ".join(failures[:4]) or "los feeds no devolvieron novedades"
-        raise RuntimeError(f"No hay noticias de las últimas 24 horas. {detail}")
+        print(
+            "AVISO: no se han podido recopilar noticias recientes. "
+            f"{detail}. Se enviará el seguimiento de mercados sin sección de noticias.",
+            file=sys.stderr,
+        )
+        return []
     print(f"RSS: {len(stories)} noticias candidatas de las últimas 24 horas.")
     if failures:
         print(f"Advertencia: {len(failures)} consultas RSS no respondieron.")
