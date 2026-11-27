@@ -49,17 +49,29 @@ SECTIONS = [
         "geopolitics war sanctions tariffs trade energy oil gas OPEC",
         "companies earnings layoffs bankruptcy mergers acquisitions IPO",
         "stock market bonds currencies gold silver commodities China United States Europe",
+        "China economy markets trade technology government latest news",
+        "Russia Ukraine war sanctions energy economy latest news",
+        "central bank liquidity injections quantitative easing bond purchases global markets",
         "economía mundial mercados bancos centrales tipos interés inflación geopolítica",
         "guerras sanciones aranceles petróleo gas materias primas empresas resultados",
+        "site:reuters.com world economy markets central banks China Russia",
+        "site:apnews.com economy world China Russia markets",
+        "site:ft.com markets economy central banks China Russia",
+        "site:ecb.europa.eu monetary policy inflation financial stability",
     ]),
     ("España y Gipuzkoa", [
         "España política economía gobierno Congreso empresas sociedad",
-        "Gipuzkoa Donostia Gipuzkoa noticias economía sociedad infraestructuras",
+        "Gipuzkoa Donostia noticias economía sociedad infraestructuras",
         "País Vasco Euskadi política economía industria sociedad",
+        "site:eitb.eus Gipuzkoa economía Euskadi actualidad",
+        "site:diariovasco.com Gipuzkoa Donostia economía",
+        "site:elpais.com España economía política empresas",
+        "site:expansion.com economía empresas mercados España",
     ]),
     ("Cultura, sociedad y descubrimientos", [
         "historia arqueología patrimonio descubrimiento cultura libros educación",
-        "medioambiente sociedad descubrimientos curiosidades investigación social",
+        "medioambiente sociedad descubrimientos investigación social",
+        "major cultural heritage archaeology discovery environment society news",
     ]),
     ("Ciencia, investigación y tecnología", [
         "neuroscience brain epilepsy EEG electroencephalography research",
@@ -67,8 +79,28 @@ SECTIONS = [
         "scientific research artificial intelligence medicine breakthrough",
         "artificial intelligence software cybersecurity technology companies innovation",
         "neurociencia cerebro epilepsia EEG investigación científica",
+        "site:nature.com science research discovery medicine",
+        "site:science.org science research discovery",
+        "site:nasa.gov science space discovery research",
+        "site:esa.int science space research discovery",
     ]),
 ]
+
+# Publisher domains with a strong editorial or primary-source track record are
+# considered first when the candidate list is larger than the model input budget.
+PREFERRED_SOURCE_DOMAINS = {
+    "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "wsj.com",
+    "bbc.com", "bbc.co.uk", "dw.com", "theguardian.com", "politico.eu",
+    "ecb.europa.eu", "federalreserve.gov", "imf.org", "worldbank.org",
+    "eurostat.ec.europa.eu", "ine.es", "europa.eu", "consilium.europa.eu",
+    " efe.com", "efe.com", "europapress.es", "rtve.es", "elpais.com",
+    "eldiario.es", "expansion.com", "cincodias.elpais.com", "eitb.eus",
+    "diariovasco.com", "naiz.eus", "berria.eus", "nature.com", "science.org",
+    "nasa.gov", "esa.int", "nih.gov", "who.int", "phys.org",
+}
+
+# Broker/lead-generation material is not suitable as independent news coverage.
+BLOCKED_SOURCE_DOMAINS = {"tmgm.com"}
 
 
 class TextExtractor(HTMLParser):
@@ -361,6 +393,22 @@ def deduplicate_story_records(
     return kept
 
 
+def story_source_domain(story: Story) -> str:
+    """Resolve the publisher domain from RSS metadata, not the Google News wrapper."""
+    candidate = story.source_url or story.link
+    host = (urllib.parse.urlparse(candidate).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def source_priority(story: Story) -> int:
+    host = story_source_domain(story)
+    if any(host == domain or host.endswith("." + domain) for domain in BLOCKED_SOURCE_DOMAINS):
+        return -10
+    if any(host == domain or host.endswith("." + domain) for domain in PREFERRED_SOURCE_DOMAINS):
+        return 2
+    return 0
+
+
 def fetch_query(section: str, query: str) -> list[Story]:
     params = urllib.parse.urlencode({
         "q": f"{query} when:1d",
@@ -425,11 +473,22 @@ def collect_stories() -> list[Story]:
             except Exception as exc:
                 failures.append(f"{section}/{query}: {type(exc).__name__}")
 
+    # Exclude broker/lead-generation publishers, then prioritize established
+    # newsrooms and primary institutions before applying the model-input limit.
+    blocked = [story for story in candidates if source_priority(story) < 0]
+    candidates = [story for story in candidates if source_priority(story) >= 0]
+    if blocked:
+        print(f"RSS: {len(blocked)} candidatos de fuentes comerciales excluidos.")
     # Collapse exact and near-identical headlines across the overlapping RSS queries.
     stories = deduplicate_story_records(candidates, "RSS")
-    now = datetime.now(timezone.utc)
-    stories = sorted(stories, key=lambda s: s.published, reverse=True)
-    # Bound the model input while keeping a broad cross-section of fresh results.
+    stories.sort(
+        key=lambda story: (
+            source_priority(story),
+            story.published,
+        ),
+        reverse=True,
+    )
+    # Bound the model input while retaining reputable publishers and fresh results.
     stories = stories[:70]
     for index, story in enumerate(stories, 1):
         story.id = f"N{index:03d}"
@@ -496,7 +555,32 @@ OBJETIVO Y CRITERIO: relevancia general e importancia real. No hay un número m�
 fijo. Incluye todas las noticias que merezcan realmente la pena, pero sé exigente:
 no rellenes, no repitas la misma historia y no incluyas noticias triviales. La
 distribución entre secciones es flexible; una sección puede dominar si la actualidad
-lo justifica.
+lo justifica. Es preferible enviar pocas noticias sólidas que muchas superficiales.
+
+PRIORIDAD EDITORIAL Y FUENTES:
+- Da prioridad a información contrastable de agencias, medios con redacción reconocida
+  y organismos oficiales. Valora especialmente Reuters, AP, Bloomberg, Financial Times,
+  BBC, DW, medios públicos y regionales solventes, y comunicados/datos de bancos centrales
+  e instituciones estadísticas.
+- No trates automáticamente como fiable una noticia por aparecer en Google News.
+  Desconfía de webs de brokers, plataformas de trading, afiliación, publicidad encubierta
+  y páginas cuyo objetivo principal sea captar clientes financieros.
+- No uses artículos promocionales, contenido patrocinado, notas comerciales reescritas
+  ni titulares clickbait como noticias relevantes.
+- Evita que un único medio domine el correo: normalmente no selecciones más de dos
+  noticias de la misma fuente y busca diversidad real de editores.
+- En economía, distingue datos publicados, decisiones oficiales y movimientos de mercado
+  de previsiones, rumores y opiniones. No presentes una explicación causal como hecho
+  si el candidato no la demuestra.
+- En geopolítica, busca acontecimientos concretos y sus consecuencias: China, Rusia,
+  Ucrania, Estados Unidos, Europa, conflictos, sanciones, comercio, energía y seguridad.
+  No fuerces una noticia de cada país si no hay novedades relevantes.
+- Para España y Gipuzkoa, prioriza decisiones públicas, economía, industria, empresas,
+  infraestructuras y acontecimientos con impacto real; no titulares partidistas menores.
+- En ciencia, prioriza resultados de investigación publicados, instituciones científicas
+  y avances verificables frente a notas promocionales de empresas.
+- Si una noticia solo aporta un titular vago, un extracto insuficiente o una interpretación
+  especulativa, descártala. No rellenes secciones para que todas tengan noticias.
 
 SECCIONES Y ORDEN:
 1. Economía y geopolítica (prioridad principal): economía y mercados mundiales,
@@ -559,6 +643,8 @@ CANDIDATOS:
         source = valid[sid]
         if datetime.now(timezone.utc) - source.published > MAX_AGE:
             continue
+        if source_priority(source) < 0:
+            continue
         item["url"] = source.link
         item["image_source_url"] = source.source_url
         item["source_name"] = source.source
@@ -585,6 +671,20 @@ CANDIDATOS:
             continue
         unique_articles.append(article)
     articles = unique_articles
+
+    # Enforce source diversity even if the model returns several stories from one outlet.
+    source_counts: dict[str, int] = {}
+    diversified: list[dict[str, Any]] = []
+    for article in articles:
+        source = next((story for story in stories if story.id == str(article.get("id"))), None)
+        domain = story_source_domain(source) if source else str(article.get("source_name") or "").lower()
+        count = source_counts.get(domain, 0)
+        if count >= 2:
+            print(f"Editorial: noticia descartada para diversificar fuentes ({domain}).")
+            continue
+        source_counts[domain] = count + 1
+        diversified.append(article)
+    articles = diversified
 
     order = {name: index for index, (name, _) in enumerate(SECTIONS)}
     # Stable sorts preserve the agreed section order and newest-first order within each section.
