@@ -480,7 +480,7 @@ def editorial_selection(stories: list[Story], api_key: str) -> dict[str, Any]:
         "id": s.id, "section_hint": s.section, "title": s.title,
         "source": s.source, "source_url": s.source_url,
         "published": s.published.isoformat(),
-        "excerpt": s.excerpt, "url": s.link, "image_url": s.image_url,
+        "excerpt": s.excerpt, "url": s.link,
     } for s in stories]
     prompt = f"""
 Eres el editor de un briefing diario de actualidad en español. La fecha actual es
@@ -558,8 +558,6 @@ CANDIDATOS:
         item["image_source_url"] = source.source_url
         item["source_name"] = source.source
         item["published"] = source.published.isoformat()
-        item["image_url"] = source.image_url
-        item["rss_image_url"] = source.image_url
         item["original_headline"] = source.title
         seen.add(sid)
         articles.append(item)
@@ -604,56 +602,13 @@ def is_probably_spanish(text: str) -> bool:
 
 
 def fallback_selection(stories: list[Story]) -> dict[str, Any]:
-    """Publish only clearly Spanish RSS items; never expose untranslated headlines."""
-    articles: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for story in sorted(stories, key=lambda item: item.published, reverse=True):
-        combined = f"{story.title}. {story.excerpt}"
-        if not story.excerpt or not is_probably_spanish(combined):
-            continue
-        key = re.sub(r"[^a-z0-9áéíóúüñ]+", "", story.title.lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        articles.append({
-            "id": story.id,
-            "section": story.section,
-            "headline": story.title,
-            "summary": story.excerpt[:500],
-            "why_it_matters": (
-                "Se incluye como información de actualidad procedente del feed RSS. "
-                "Al no estar disponible el análisis editorial, conviene consultar la fuente."
-            ),
-            "source_name": story.source,
-            "url": story.link,
-            "image_source_url": story.source_url,
-            "published": story.published.isoformat(),
-            "image_url": story.image_url,
-            "rss_image_url": story.image_url,
-            "original_headline": story.title,
-        })
-    unique_articles: list[dict[str, Any]] = []
-    for article in articles:
-        duplicate = next((
-            previous for previous in unique_articles
-            if are_duplicate_stories(
-                str(article.get("original_headline") or article.get("headline") or ""),
-                str(previous.get("original_headline") or previous.get("headline") or ""),
-                str(article.get("url") or ""), str(previous.get("url") or ""),
-            )
-        ), None)
-        if duplicate:
-            continue
-        unique_articles.append(article)
-    articles = unique_articles
-    order = {name: index for index, (name, _) in enumerate(SECTIONS)}
-    articles.sort(key=lambda item: item.get("published", ""), reverse=True)
-    articles.sort(key=lambda item: order.get(item.get("section"), 99))
+    """Fail closed: never publish raw RSS headlines as an editorial briefing."""
     print(
-        f"Respaldo RSS: {len(articles)} noticias con indicios suficientes de estar en castellano.",
+        "Respaldo editorial desactivado: Gemini no está disponible; "
+        "se enviará únicamente el seguimiento de mercados.",
         file=sys.stderr,
     )
-    return {"articles": articles}
+    return {"articles": []}
 
 
 
@@ -2223,13 +2178,11 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
                 f"Por qué importa: {article.get('why_it_matters', '')}",
                 f"Fuente: {article.get('source_name', '')} — {article.get('url', '')}",
             ])
-            if article.get("image_url"):
-                plain.append(f"Imagen: {article['image_url']}")
     if not ai_used:
         if not os.environ.get("GEMINI_API_KEY", "").strip():
-            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; se muestran solo noticias RSS identificadas como probablemente escritas en castellano, sin análisis editorial.")
+            plain.append("\\nAviso: GEMINI_API_KEY no está disponible; no se han incluido noticias sin revisión editorial.")
         else:
-            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); se muestran solo noticias RSS identificadas como probablemente escritas en castellano, sin análisis editorial.")
+            plain.append(f"\\nAviso: Gemini no pudo analizar las noticias ({ai_error or 'error no identificado'}); no se han incluido noticias sin revisión editorial.")
     msg.set_content("\n".join(plain))
 
     cards = []
@@ -2240,31 +2193,8 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
         entries = []
         for article in section_articles:
             published = parse_date(article.get("published", "")) or now.astimezone(timezone.utc)
-            image_html = ""
-            if article.get("_image_cid"):
-                image_html = (
-                    f"<img src='cid:{html.escape(article['_image_cid'], quote=True)}' "
-                    f"alt='Imagen de {html.escape(article.get('headline', 'la noticia'), quote=True)}' "
-                    "style='display:block;width:100%;max-width:620px;height:auto;max-height:340px;"
-                    "object-fit:cover;border-radius:8px;margin:0 0 12px'>"
-                )
-            elif article.get("image_url"):
-                image_html = (
-                    f"<img src='{html.escape(article['image_url'], quote=True)}' "
-                    "alt='Imagen de la noticia' style='display:block;width:100%;max-width:620px;"
-                    "height:auto;max-height:340px;object-fit:cover;border-radius:8px;margin:0 0 12px'>"
-                )
-            image_credit_html = ""
-            if article.get("image_credit"):
-                credit = html.escape(str(article["image_credit"]))
-                image_credit_html = (
-                    f"<p style='font-size:10px;color:#64748b;margin:-7px 0 10px'>"
-                    f"Imagen: {credit}</p>"
-                )
             entries.append(f"""
             <article style="padding:17px 0;border-bottom:1px solid #e5e7eb">
-              {image_html}
-              {image_credit_html}
               <h3 style="font-size:17px;line-height:1.4;margin:0 0 8px">
                 <a href="{html.escape(article.get('url', ''), quote=True)}" style="color:#1d4ed8;text-decoration:none">{html.escape(article.get('headline', 'Noticia'))}</a>
               </h3>
@@ -2329,14 +2259,14 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
         note = (
             "<p style='padding:10px;background:#fff7ed;color:#9a3412;font-size:12px'>"
             "GEMINI_API_KEY no está disponible en el entorno de GitHub Actions. "
-            "Este envío contiene extractos RSS sin análisis editorial.</p>"
+            "No se han incluido noticias porque no ha sido posible realizar el análisis editorial.</p>"
         )
     else:
         note = (
             "<p style='padding:10px;background:#fff7ed;color:#9a3412;font-size:12px'>"
             "La clave GEMINI_API_KEY sí está presente, pero la llamada a Gemini ha fallado. "
             f"Motivo comunicado por la API: {html.escape(ai_error or 'error no identificado')}."
-            " Se ha utilizado el modo RSS como respaldo, mostrando únicamente noticias que parecen estar redactadas en castellano.</p>"
+            " No se han incluido noticias sin revisión editorial.</p>"
         )
     html_body = f"""<!doctype html><html lang="es"><body style="margin:0;background:#f8fafc;font-family:Arial,Helvetica,sans-serif;color:#0f172a">
     <main style="max-width:720px;margin:24px auto;padding:28px;background:#fff;border:1px solid #e2e8f0;border-radius:12px">
@@ -2344,23 +2274,10 @@ def build_email(editorial: dict[str, Any], markets: list[dict[str, Any]],
       <h1 style="font-size:27px;margin:0 0 6px">Tu resumen diario</h1>
       <p style="font-size:14px;color:#64748b;margin:0 0 18px">{html.escape(spanish_date(now))} · Novedades de las últimas 24 horas</p>
       {note}{market_html}
-      {''.join(cards) if cards else ('<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>' if ai_used else '<p>Gemini no ha podido completar el análisis y no se han encontrado noticias RSS que podamos identificar con suficiente confianza como contenido en castellano. El seguimiento de mercados sí está disponible.</p>')}
+      {''.join(cards) if cards else ('<p>No se han encontrado noticias suficientemente relevantes en las últimas 24 horas.</p>' if ai_used else '<p>Gemini no ha podido completar el análisis editorial. Para evitar noticias de baja calidad, se ha omitido la sección de noticias; el seguimiento de mercados sí está disponible.</p>')}
       <p style="font-size:11px;line-height:1.5;color:#64748b;margin:24px 0 0">Las noticias se seleccionan a partir de feeds RSS. Los datos de mercado proceden de Yahoo Finance y pueden tener retraso. Verifica los datos antes de tomar decisiones de inversión.</p>
     </main></body></html>"""
     msg.add_alternative(html_body, subtype="html")
-    html_part = msg.get_body(preferencelist=("html",))
-    if html_part is not None:
-        for article in articles:
-            image_data = article.get("_image_data")
-            if not image_data:
-                continue
-            html_part.add_related(
-                image_data,
-                maintype="image",
-                subtype=article["_image_subtype"],
-                cid=f"<{article['_image_cid']}>",
-                disposition="inline",
-            )
     return msg
 
 
@@ -2424,7 +2341,6 @@ def main() -> int:
         f"activos principales: {len(markets)}; mayores subidas: {len(movers_up)}; "
         f"mayores bajadas: {len(movers_down)}"
     )
-    prepare_article_images(editorial, api_key)
     message = build_email(editorial, markets, movers_up, movers_down, ai_used, ai_error)
     send_email(message, address, recipient, app_password)
     print("Correo enviado correctamente.")
