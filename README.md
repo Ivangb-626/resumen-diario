@@ -21,7 +21,6 @@ Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, E
 - El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
 - Gemini clasifica los candidatos por relevancia y redacta en castellano los titulares, resúmenes y análisis usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
 - Los datos de mercado se consultan desde Yahoo Finance.
-- Gemini prepara dos consultas específicas por noticia. Commons y la página del medio (JSON-LD/Open Graph/HTML) se consultan en paralelo; si Google News solo ofrece una página intermedia o una portada de medio, se descartan sus imágenes de marca y no se confunden con fotos del artículo; las imágenes RSS también compiten como candidatas. Un ranking combina coincidencia con el titular, resumen y consultas, metadatos y procedencia. Pillow descarta imágenes vacías o de baja calidad. Cuando hay `GEMINI_API_KEY`, Gemini 3.1 Flash-Lite recibe hasta seis finalistas y clasifica su relación visual como directa, relacionada, ilustrativa o ajena; las dos primeras categorías pueden ganar la selección específica. Si el servicio falla, se utiliza el ranking local y se mantienen las fuentes de respaldo. Luego se prueban GDELT DOC 2.0 con una consulta independiente por titular (sin agrupar varias noticias en una búsqueda OR), Openverse y, opcionalmente, Brave. Solo cuando se agotan las búsquedas específicas, Commons realiza varias consultas temáticas propias de cada noticia; no se reciclan paisajes urbanos genéricos para rellenar huecos. Las fotografías temáticas se etiquetan expresamente como ilustrativas y una noticia puede quedarse sin imagen si no hay ninguna que guarde relación. Se conservan los metadatos de autor/licencia cuando están disponibles.
 
 **Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
 
@@ -35,25 +34,19 @@ En [Settings → Secrets and variables → Actions](https://github.com/Ivangb-62
 | `GMAIL_APP_PASSWORD` | Sí | Contraseña de aplicación de Gmail |
 | `GMAIL_RECIPIENT` | No | Destinatario; si falta, se usa GMAIL_ADDRESS |
 | `GEMINI_API_KEY` | Recomendado | Clave de Gemini para selección y análisis editorial |
-| `BRAVE_SEARCH_API_KEY` | Opcional | Búsqueda adicional de imágenes cuando fallan las fuentes gratuitas anteriores |
 
-### Obtener BRAVE_SEARCH_API_KEY (opcional)
+### Imágenes
 
-1. Crea una suscripción de Brave Search API en [Brave Search API](https://brave.com/search/api/).
-2. Genera una clave para la API de imágenes.
-3. Añádela en GitHub Secrets con el nombre exacto `BRAVE_SEARCH_API_KEY`.
-
-Si no se configura, el sistema sigue utilizando las imágenes del artículo, RSS y GDELT. Brave solo se consulta para noticias que continúan sin una imagen descargable. La búsqueda externa puede tener condiciones de uso y derechos de imagen propios; la similitud del titular se usa como filtro adicional, no como garantía de licencia.
+Los correos se generan sin imágenes. No se realizan búsquedas, descargas ni adjuntos de fotografías.
 
 ### Obtener GEMINI_API_KEY
-
 1. Abre [Google AI Studio](https://aistudio.google.com/app/apikey).
 2. Crea una API key para Gemini.
 3. Añádela en GitHub como secreto llamado exactamente `GEMINI_API_KEY`.
 
-El proyecto usa `gemini-3.1-flash-lite` por defecto. Los correos no incluyen imágenes.  Las pruebas de regresión ejecutan 52 casos diez veces y una comprobación adicional con noticias RSS recientes; esta última publica una galería de imágenes como artefacto descargable de GitHub Actions durante siete días. La prueba mide también la proporción de fotografías específicas y no considera una imagen genérica reutilizada como cobertura satisfactoria. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias y,  no se envían datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
+El proyecto usa `gemini-3.1-flash-lite` por defecto. Los correos no incluyen imágenes.  La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias y,  no se envían datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error. Como respaldo, solo se muestran noticias RSS cuyo titular y extracto superan un filtro conservador de castellano; no se traducen ni se inventan contenidos. Las noticias que no superan ese filtro se omiten. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
+Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error, pero omite la sección de noticias: nunca publica titulares RSS sin revisión editorial. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
 ### Gmail SMTP
 
