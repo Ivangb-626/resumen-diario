@@ -44,7 +44,7 @@ Los correos se generan sin imágenes. No se realizan búsquedas, descargas ni ad
 2. Crea una API key para Gemini.
 3. Añádela en GitHub como secreto llamado exactamente `GEMINI_API_KEY`.
 
-El proyecto usa `gemini-3.1-flash-lite` por defecto. Los correos no incluyen imágenes.  La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos; en este proyecto se envían titulares y extractos públicos de noticias y,  no se envían datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
+El proyecto usa `gemini-3.1-flash-lite` por defecto. Los correos no incluyen imágenes. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos. En este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
 Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error, pero omite la sección de noticias: nunca publica titulares RSS sin revisión editorial. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
