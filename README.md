@@ -4,7 +4,7 @@ Briefing de actualidad en español, generado automáticamente con GitHub Actions
 
 ## Contenido
 
-El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin un número máximo fijo de noticias. La selección es flexible: solo se incluyen noticias que aporten valor y no se rellenan secciones artificialmente.
+El correo cubre las novedades publicadas durante las **últimas 24 horas**, sin un número máximo fijo de noticias. La selección es flexible: solo se incluyen noticias que aporten valor y no se rellenan secciones artificialmente. Se priorizan agencias, medios con redacción reconocida y fuentes institucionales; se descarta contenido promocional o de captación comercial y se limita la concentración en un solo medio.
 
 1. **Economía y geopolítica** (prioridad principal): economía mundial, mercados, bancos centrales, empresas, conflictos, sanciones, energía, materias primas, bonos y divisas.
 2. **España y Gipuzkoa**: política, economía, sociedad, País Vasco, Gipuzkoa y Donostia.
@@ -17,9 +17,9 @@ Al principio se añade un seguimiento indicativo de S&P 500, Nasdaq Composite, E
 
 ## Cómo funciona
 
-- Google News RSS aporta candidatos de distintas consultas en español e inglés.
-- El script descarta noticias fuera de las últimas 24 horas y elimina duplicados.
-- Gemini clasifica los candidatos por relevancia y redacta en castellano los titulares, resúmenes y análisis usando exclusivamente los titulares y extractos recibidos. No debe inventar datos ni enlaces.
+- Google News RSS aporta candidatos de distintas consultas en español e inglés, con búsquedas específicas sobre China, Rusia, bancos centrales, liquidez, España, Gipuzkoa y fuentes científicas e institucionales.
+- El script descarta noticias fuera de las últimas 24 horas, excluye fuentes comerciales de brokers/lead-generation, prioriza editores y organismos reconocidos y elimina duplicados.
+- Gemini aplica criterios de relevancia, fiabilidad, diversidad de fuentes y calidad del extracto. Redacta en castellano titulares, resúmenes y análisis usando exclusivamente la información recibida. No debe inventar datos ni enlaces.
 - Los datos de mercado se consultan desde Yahoo Finance.
 
 **Limitación importante:** el análisis de Gemini se basa en la información visible en los feeds RSS (titular y extracto), no garantiza que se haya leído el artículo completo. Los datos de mercado pueden tener retraso y no deben utilizarse como única fuente para invertir.
@@ -46,7 +46,7 @@ Los correos se generan sin imágenes. No se realizan búsquedas, descargas ni ad
 
 El proyecto usa `gemini-3.1-flash-lite` por defecto. Los correos no incluyen imágenes. La disponibilidad y los límites de la modalidad gratuita dependen de la cuenta, el modelo y las cuotas vigentes. En la modalidad gratuita Google puede utilizar el contenido enviado para mejorar sus productos. En este proyecto se envían titulares y extractos públicos de noticias, no datos personales. Consulta [precios y condiciones oficiales](https://ai.google.dev/gemini-api/docs/pricing).
 
-Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error, pero omite la sección de noticias: nunca publica titulares RSS sin revisión editorial. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
+Si Gemini devuelve errores temporales de saturación (HTTP 429, 500, 502, 503 o 504), el script reintenta automáticamente hasta tres veces con esperas crecientes. Si finalmente no responde, el correo sigue enviándose con el seguimiento de mercados y un aviso del error, pero omite la sección de noticias: nunca publica titulares RSS sin revisión editorial. Si todas las consultas RSS fallan o no devuelven noticias recientes, también se envía el seguimiento de mercados y se informa de que no se han podido recopilar noticias. Cuando Gemini funciona, todos los titulares, resúmenes y análisis se generan en castellano.
 
 ### Gmail SMTP
 
