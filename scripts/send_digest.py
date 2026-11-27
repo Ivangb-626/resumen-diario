@@ -93,7 +93,7 @@ PREFERRED_SOURCE_DOMAINS = {
     "bbc.com", "bbc.co.uk", "dw.com", "theguardian.com", "politico.eu",
     "ecb.europa.eu", "federalreserve.gov", "imf.org", "worldbank.org",
     "eurostat.ec.europa.eu", "ine.es", "europa.eu", "consilium.europa.eu",
-    " efe.com", "efe.com", "europapress.es", "rtve.es", "elpais.com",
+    "efe.com", "europapress.es", "rtve.es", "elpais.com",
     "eldiario.es", "expansion.com", "cincodias.elpais.com", "eitb.eus",
     "diariovasco.com", "naiz.eus", "berria.eus", "nature.com", "science.org",
     "nasa.gov", "esa.int", "nih.gov", "who.int", "phys.org",
@@ -394,9 +394,17 @@ def deduplicate_story_records(
 
 
 def story_source_domain(story: Story) -> str:
-    """Resolve the publisher domain from RSS metadata, not the Google News wrapper."""
-    candidate = story.source_url or story.link
+    """Resolve the publisher identity without grouping all Google News links together."""
+    candidate = story.source_url or ""
     host = (urllib.parse.urlparse(candidate).hostname or "").lower()
+    if not host or host == "news.google.com" or host.endswith(".news.google.com"):
+        source_name = (story.source or "").strip().lower()
+        parsed_name = urllib.parse.urlparse(
+            source_name if "://" in source_name else "//" + source_name
+        )
+        host = (parsed_name.hostname or "").lower()
+    if not host:
+        host = (urllib.parse.urlparse(story.link).hostname or "").lower()
     return host[4:] if host.startswith("www.") else host
 
 
