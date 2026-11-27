@@ -50,14 +50,19 @@ SECTIONS = [
         "companies earnings layoffs bankruptcy mergers acquisitions IPO",
         "stock market bonds currencies gold silver commodities China United States Europe",
         "China economy markets trade technology government latest news",
+        "China stimulus economy property exports trade tensions central bank",
         "Russia Ukraine war sanctions energy economy latest news",
+        "Russia sanctions oil gas trade finance latest developments",
         "central bank liquidity injections quantitative easing bond purchases global markets",
+        "Federal Reserve ECB Bank of Japan central bank liquidity injection bond purchases repo",
+        "global bond markets sovereign debt currencies dollar euro yen gold oil commodities",
         "economía mundial mercados bancos centrales tipos interés inflación geopolítica",
         "guerras sanciones aranceles petróleo gas materias primas empresas resultados",
         "site:reuters.com world economy markets central banks China Russia",
         "site:apnews.com economy world China Russia markets",
         "site:ft.com markets economy central banks China Russia",
         "site:ecb.europa.eu monetary policy inflation financial stability",
+        "site:federalreserve.gov monetary policy financial stability liquidity",
     ]),
     ("España y Gipuzkoa", [
         "España política economía gobierno Congreso empresas sociedad",
@@ -67,11 +72,15 @@ SECTIONS = [
         "site:diariovasco.com Gipuzkoa Donostia economía",
         "site:elpais.com España economía política empresas",
         "site:expansion.com economía empresas mercados España",
+        "site:efe.com España economía empresas gobierno",
+        "site:europapress.es País Vasco Gipuzkoa economía industria",
     ]),
     ("Cultura, sociedad y descubrimientos", [
         "historia arqueología patrimonio descubrimiento cultura libros educación",
         "medioambiente sociedad descubrimientos investigación social",
         "major cultural heritage archaeology discovery environment society news",
+        "site:bbc.com culture archaeology heritage discovery",
+        "site:theguardian.com culture archaeology environment discovery",
     ]),
     ("Ciencia, investigación y tecnología", [
         "neuroscience brain epilepsy EEG electroencephalography research",
@@ -83,6 +92,7 @@ SECTIONS = [
         "site:science.org science research discovery",
         "site:nasa.gov science space discovery research",
         "site:esa.int science space research discovery",
+        "site:nih.gov neuroscience epilepsy EEG research",
     ]),
 ]
 
@@ -489,6 +499,8 @@ def collect_stories() -> list[Story]:
         print(f"RSS: {len(blocked)} candidatos de fuentes comerciales excluidos.")
     # Collapse exact and near-identical headlines across the overlapping RSS queries.
     stories = deduplicate_story_records(candidates, "RSS")
+    # Select candidates with source quality first, but reserve capacity for every
+    # editorial section so a busy economy feed cannot crowd out science or culture.
     stories.sort(
         key=lambda story: (
             source_priority(story),
@@ -496,8 +508,21 @@ def collect_stories() -> list[Story]:
         ),
         reverse=True,
     )
-    # Bound the model input while retaining reputable publishers and fresh results.
-    stories = stories[:70]
+    section_limits = {
+        "Economía y geopolítica": 40,
+        "España y Gipuzkoa": 25,
+        "Cultura, sociedad y descubrimientos": 20,
+        "Ciencia, investigación y tecnología": 25,
+    }
+    balanced: list[Story] = []
+    section_counts = {name: 0 for name, _ in SECTIONS}
+    for story in stories:
+        limit = section_limits.get(story.section, 15)
+        if section_counts.get(story.section, 0) >= limit:
+            continue
+        balanced.append(story)
+        section_counts[story.section] = section_counts.get(story.section, 0) + 1
+    stories = balanced[:110]
     for index, story in enumerate(stories, 1):
         story.id = f"N{index:03d}"
     if not stories:
@@ -582,7 +607,15 @@ PRIORIDAD EDITORIAL Y FUENTES:
   si el candidato no la demuestra.
 - En geopolítica, busca acontecimientos concretos y sus consecuencias: China, Rusia,
   Ucrania, Estados Unidos, Europa, conflictos, sanciones, comercio, energía y seguridad.
-  No fuerces una noticia de cada país si no hay novedades relevantes.
+  Revisa expresamente los candidatos sobre China y Rusia, sin forzar noticias si no hay
+  novedades reales.
+- En mercados y bancos centrales, presta atención a inyecciones o retiradas de liquidez,
+  operaciones repo, compras/ventas de activos, cambios de balance, deuda soberana y
+  movimientos relevantes de bonos y divisas. No confundas una variación diaria de precio
+  con una noticia de fondo.
+- No uses como fuente de una noticia económica a brokers, plataformas de trading ni
+  webs que comercialicen productos financieros. Si el candidato procede de una fuente
+  desconocida y el extracto no aporta datos verificables, descártalo.
 - Para España y Gipuzkoa, prioriza decisiones públicas, economía, industria, empresas,
   infraestructuras y acontecimientos con impacto real; no titulares partidistas menores.
 - En ciencia, prioriza resultados de investigación publicados, instituciones científicas
@@ -625,6 +658,12 @@ REGLAS ESTRICTAS:
 - No inventes hechos, cifras, declaraciones, contexto, enlaces ni causalidades.
 - Usa solo la información de cada candidato. Si el extracto no basta para redactar
   un resumen fiable, descarta la noticia.
+- Comprueba la coherencia interna entre titular y extracto. Si cifras, dirección de un
+  movimiento (subida/caída), fecha o protagonistas se contradicen, descarta el candidato.
+- No presentes previsiones, opiniones de analistas ni explicaciones atribuidas a terceros
+  como hechos confirmados. Atribuye siempre las interpretaciones a quien las formula.
+- Evita fuentes comerciales de trading/brokerage, contenido promocional, notas de prensa
+  sin interés informativo independiente y artículos evergreen reciclados.
 - No afirmes que has leído el artículo completo si solo tienes el titular y extracto.
 - No conviertas una noticia antigua en novedad. Descarta candidatos fuera de ventana.
 - No incluyas empleo, prácticas ni ofertas laborales.
