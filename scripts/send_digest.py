@@ -94,7 +94,7 @@ PREFERRED_SOURCE_DOMAINS = {
     "ecb.europa.eu", "federalreserve.gov", "imf.org", "worldbank.org",
     "eurostat.ec.europa.eu", "ine.es", "europa.eu", "consilium.europa.eu",
     "efe.com", "europapress.es", "rtve.es", "elpais.com",
-    "eldiario.es", "expansion.com", "cincodias.elpais.com", "eitb.eus",
+    "eldiario.es", "expansion.com", "cincodias.com", "eitb.eus",
     "diariovasco.com", "naiz.eus", "berria.eus", "nature.com", "science.org",
     "nasa.gov", "esa.int", "nih.gov", "who.int", "phys.org",
 }
