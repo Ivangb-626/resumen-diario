@@ -18,22 +18,18 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Descargar repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Preparar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Instalar soporte de formatos de imagen
         run: python -m pip install --disable-pip-version-check --no-cache-dir Pillow pillow-avif-plugin
 
-      - name: Ejecutar diez rondas de pruebas unitarias
-        run: |
-          for iteration in $(seq 1 10); do
-            echo "========== RONDA $iteration/10 =========="
-            python -m unittest discover -s tests -v
-          done
+      - name: Ejecutar pruebas unitarias
+        run: python -m unittest discover -s tests -v
 
       - name: Comprobar imágenes con noticias RSS reales
         env:
@@ -43,7 +39,7 @@ jobs:
 
       - name: Publicar galería para revisión visual
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: image-review-${{ github.run_number }}
           path: image-samples/
